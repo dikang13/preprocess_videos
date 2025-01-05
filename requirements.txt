@@ -1,0 +1,7 @@
+jax[cuda11_pip]==0.4.38
+jaxlib==0.4.38
+numba==0.60.0
+pynrrd==1.1.1
+tifffile==2024.12.12
+numpy==1.26.3
+tqdm==4.66.2

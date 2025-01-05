@@ -1,0 +1,11 @@
+name: preprocess_videos
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.12.3
+  - pip=24.0
+  - numpy=1.26.3
+  - tqdm=4.66.2
+  - pip:
+    - -r requirements.txt
