@@ -1,4 +1,3 @@
-```markdown
 # Video Preprocessing Pipeline
 
 A Python package for efficient preprocessing of large microscopy video data, optimized for GPU acceleration using JAX and CUDA.
@@ -116,4 +115,3 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 ## Contact
 dikang13@gmail.com
-```
