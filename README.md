@@ -20,7 +20,7 @@ This package processes time-lapsed fluorescent microscopy images with:
 ### Using conda (recommended)
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/preprocess_videos.git
+git clone git@github.com:dikang13/preprocess_videos.git
 cd preprocess_videos
 
 # Create and activate conda environment

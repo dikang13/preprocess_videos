@@ -10,6 +10,7 @@ from fileio import get_total_pages, load_nd2_chunk, load_tif_chunk, parallel_sav
 from transform import background_subtract, bin_and_transpose
 from noise import get_avg_noise
 from utils import parse_slice, parse_list, parse_float_list, THREAD_POOL_SIZE
+import re
 
 def preprocess(
     input_path, output_dir, noise_path, blank_dir,
@@ -168,7 +169,7 @@ def main():
     # Performance settings
     parser.add_argument('--chunk_size', type=int, default=256,
                         help='Number of timepoints to process at once')
-    parser.add_argument('--gpu', type=int, default=3,
+    parser.add_argument('--gpu', type=int, default=2,
                         help='GPU device number to use')
 
     args = parser.parse_args()

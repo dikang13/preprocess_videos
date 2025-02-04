@@ -1,29 +1,26 @@
-```markdown
 # Video Preprocessing Pipeline
 
 A Python package for efficient preprocessing of large microscopy video data, optimized for GPU acceleration using JAX and CUDA.
 
 ## Features
-- Efficient processing of large TIF files
-- Background noise subtraction
-- 3x3 binning optimization
-- GPU acceleration with JAX
-- Parallel I/O operations
-- MIP (Maximum Intensity Projection) generation
-- NRRD output format support
+This package processes time-lapsed fluorescent microscopy images with:
+- Support for ND2/TIF formats and multi-channel 2D/3D images
+- Fixed pattern noise computation and subtraction
+- Configurable pixel binning for enhanced signal and reduced file size
+- Multiple output formats (NRRD, TIF) with MIP generation for 3D images
 
+
+## Installation
 ## System Requirements
 - Python 3.12+
 - NVIDIA GPU with CUDA support
 - GPU Memory: >= 8GB recommended
 - System Memory: >= 32GB recommended
-
-## Installation
-
+  
 ### Using conda (recommended)
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/preprocess_videos.git
+git clone git@github.com:dikang13/preprocess_videos.git
 cd preprocess_videos
 
 # Create and activate conda environment
@@ -33,87 +30,63 @@ conda activate video_preprocess
 
 ### Using pip
 ```bash
-# Create virtual environment
-python -m venv venv
-source venv/bin/activate  # On Linux/Mac
-# or
-.\venv\Scripts\activate  # On Windows
+# Create and activate virtual environment
+python -m venv env
+source env/bin/activate
 
-# Install dependencies
+# Install dependencies from requirements.txt
 pip install -r requirements.txt
+
+# For GPU support
+pip install --upgrade "jax[cuda]" -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
 ```
 
-## Usage
+### User-specified parameters
 
-### Command Line Interface
+- `--input_path`: Path to input file (.nd2 or .tif)
+- `--output_dir`: Directory for processed outputs
+- `--noise_path`: Path to precomputed noise reference file (.tif)
+- `--blank_dir`: Directory containing noise reference files to be averaged
+- `--chunk_size`: Number of frames to process at once
+- `--n_z`: Number of Z-slices
+- `--x_range`: X dimension range as "start,end"
+- `--y_range`: Y dimension range as "start,end"
+- `--z_range`: Z dimension range as "start,end"
+- `--channels`: Channels to process as "1,2"
+- `--bitdepth`: Bit depth of images
+- `--binsize`: Binning factor
+- `--save_as`: Output format ('nrrd' or 'tif')
+- `--gpu`: GPU device number (optional, only if user wants to dedicate a specific GPU to the current run)
+
+### Examples
+#### Processing ND2 Files
 ```bash
-python -m preprocess_videos.cli input_path output_dir [options]
-
-# Example
-python -m preprocess_videos.cli /path/to/input.tif /path/to/output_dir --n-z 84 --channels 1 2
+python main.py \
+    --input_path /store1/data_raw/2025-01-14/2025-01-14-ZylaBackground.nd2 \
+    --output_dir /store1/data_processed/2025-01-14_output \
+    --noise_path /store1/data_raw/2025-01-14/avg_noise.tif \
+    --n_z 84 \
+    --x_range 0,966 \
+    --y_range 0,636 \
+    --z_range 3,80 \
+    --channels 1,2 \
+    --bitdepth 12 \
+    --binsize 3 \
+    --save_as nrrd
 ```
 
-### Options
-- `--n-z`: Number of z-slices per volume (default: 84)
-- `--spacing-lat`: Lateral spacing (default: 0.54)
-- `--spacing-axi`: Axial spacing (default: 0.54)
-- `--no-mip`: Disable MIP generation
-- `--channels`: Channels to process (default: [1,2])
-- `--noise-path`: Path to noise reference TIF file
-- `--chunk-size`: Number of timepoints to process at once
-- `--gpu`: GPU device number to use (default: 0)
-- `--max-memory`: Maximum memory usage in GB (default: 32)
-
-### Python API
-```python
-from preprocess_videos import convert_tif_to_nrrd
-
-convert_tif_to_nrrd(
-    input_path='path/to/input.tif',
-    output_dir='path/to/output',
-    n_z=84,
-    spacing_lat=0.54,
-    spacing_axi=0.54,
-    generate_mip=True,
-    channels=[1],
-    noise_path=None,
-    chunk_size=None
-)
-```
-
-## Project Structure
-```
-preprocess_videos/
-├── __init__.py
-├── cli.py           # Command line interface
-├── config.py        # Configuration and constants
-├── converter.py     # Main conversion logic
-├── processors.py    # Core processing functions
-└── utils.py         # Utility functions
-```
-
-## Input/Output Specifications
-
-### Input
-- TIF files with dimensions: 966x630x84 per timepoint
-- Optional noise reference TIF file for background subtraction
-
-### Output
-- NRRD files: 322x210x77 volumes after processing
-- Optional MIP (Maximum Intensity Projection) PNG files
-- Output directory structure:
-  ```
-  output_dir/
-  ├── NRRD/
-  │   └── prefix_t0001_ch1.nrrd
-  └── MIP/
-      └── prefix_t0001_ch1.png
-  ```
-
-## Contributing
-Contributions are welcome! Please feel free to submit a Pull Request.
-
-
-## Contact
-dikang13@gmail.com
+#### Processing TIF Files
+```bash
+python main.py \
+    --input_path /store1/501659/2025-01-23-05_exp7.2ms_fast_ram_16bit.tif \
+    --output_dir /store1/501659/2025-01-23-05_output \
+    --blank_dir /store1/501659/noise_data \
+    --n_z 100 \
+    --x_range 0,968 \
+    --y_range 0,636 \
+    --z_range 3,80 \
+    --channels 1,2 \
+    --bitdepth 12 \
+    --binsize 3 \
+    --save_as tif \
 ```
