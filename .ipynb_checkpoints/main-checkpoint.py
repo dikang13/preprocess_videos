@@ -89,7 +89,9 @@ def preprocess(
             
             # Gather all loaded frames into a NumPy array, then convert to JAX
             # shape: [current_chunk_size, n_z, len(channels), height, width]
-            chunk_data = jnp.array([f.result() for f in futures])
+            # chunk_data = jnp.array([f.result() for f in futures])
+            chunk_data_np = chunk_data_np.astype(np.uint16) 
+            chunk_data = jnp.array(chunk_data_np, dtype=jnp.float16)
             print(f"Loaded a chunk as JAX array of shape {chunk_data.shape}")
 
             # ---------------------
