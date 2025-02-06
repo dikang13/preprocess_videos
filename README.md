@@ -1,18 +1,18 @@
 # Video Preprocessing Pipeline
 
-A Python package for efficient preprocessing of large microscopy video data, optimized for GPU acceleration using JAX and CUDA.
+A Python package for efficient preprocessing of large microscopy video data (>300 GB), optimized for memory efficiency using dask array as well as time efficiency using JAX and CUDA.
 
 ## Features
-This package processes time-lapsed fluorescent microscopy images with:
+This package processes high-resolution fluorescent microscopy videos with:
 - Support for ND2/TIF formats and multi-channel 2D/3D images
 - Fixed pattern noise computation and subtraction
 - Configurable pixel binning for enhanced signal and reduced file size
-- Multiple output formats (NRRD, TIF) with MIP generation for 3D images
+- Multiple output formats (NRRD, TIF) with maximum intensity projection generation for 3D images
 
 
 ## Installation
 ### System Requirements
-- Python 3.12+
+- Python 3.10+
 - NVIDIA GPU with CUDA support
 - GPU Memory: >= 8GB recommended
 - System Memory: >= 32GB recommended
@@ -44,7 +44,6 @@ pip install --upgrade "jax[cuda]" -f https://storage.googleapis.com/jax-releases
 - `--noise_path`: Path to precomputed noise reference file (.tif)
 - `--blank_dir`: Directory containing noise reference files to be averaged
 - `--chunk_size`: Number of frames to process at once
-- `--n_pages`: Number of Z-slices in total
 - `--n_z`: Number of Z-slices per volume
 - `--x_range`: X dimension range as "start,end"
 - `--y_range`: Y dimension range as "start,end"
@@ -63,7 +62,6 @@ python main.py \
     --output_dir /store1/data_processed/2025-01-14_output \
     --noise_path /store1/data_raw/2025-01-14/avg_noise.tif \
     --chunk_size 256 \
-    --n_pages 64000 \
     --n_z 84 \
     --x_range 0,966 \
     --y_range 0,636 \
@@ -75,7 +73,8 @@ python main.py \
     --gpu 2
 ```
 
-You can also stay with the default parameters for typical 16-minute whole-brain calcium imaging recordings by omitting the optional arguments:
+You can also stay with the default parameters for typical 16-minute whole-brain calcium imaging recordings by omitting the optional arguments. 
+After 3x3 binning, all frames will assume a uniform background intensity of 800, which will be subtracted from each superpixel. Final images are clamped to fit in the range of (0, 4096] as 12-bit and exported as NRRD files.
 ```bash
 python main.py \
     --input_path /store1/shared/panneuralGFP_SWF1212/data_raw/2025-02-03/2025-02-03-18.nd2 \

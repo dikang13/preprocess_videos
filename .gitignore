@@ -23,3 +23,4 @@ ENV/
 .vscode/
 *.log
 main_old.py
+test_env/
