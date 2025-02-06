@@ -3,7 +3,7 @@ import numpy as np
 import tifffile
 import nrrd
 from pathlib import Path
-import nd2reader
+from concurrent.futures import ProcessPoolExecutor
 
 def parallel_save_outputs(save_args):
     """Save NRRD output files in parallel"""
@@ -34,24 +34,36 @@ def parallel_save_outputs(save_args):
     mip = np.max(vol_data, axis=2).astype(np.uint16)
     tifffile.imwrite(str(mip_path), mip)
 
-def load_nd2_chunk(filepath, start_page, end_page, x_range, y_range):
-    """Load specific pages from an ND2 file, handling multiple channels"""
-    # Get dimensions
-    x_size, y_size, _, t_size, c_size = nd2dim(filepath)
+
+def load_nd2_chunk(input_path, start_page, end_page, x_range, y_range):
+    """Load specific pages from an ND2 file, handling multiple channels."""
+    images = ND2Reader(input_path)
+    c_size = images.sizes['c']
     
-    # Initialize output array
-    t_size = end_page - start_page
-    chunk_data = np.zeros((t_size, c_size, x_range.stop, y_range.stop), dtype=np.uint16)
+    t_len = end_page - start_page
+    data = np.empty((t_len, c_size, y_range.stop, x_range.stop), dtype=np.uint16)
+
+    for t_idx, t in enumerate(range(start_page, end_page)):
+        for c in range(c_size):
+            data[t_idx, c, y_range, x_range] = images.get_frame_2D(c=c, t=t, z=0)
     
-    with nd2reader.ND2Reader(filepath) as images:
-        for t_idx, t in enumerate(range(start_page, end_page)):
-            for c in range(c_size):
-                # Get image for each channel and timepoint
-                img = images.get_frame_2D(c=c, t=t, z=0)
-                
-                # Store in output array
-                chunk_data[t_idx, c, x_range, y_range] = img.T
-    return chunk_data
+    return data.transpose(0, 1, 3, 2)
+
+
+def parallel_load_nd2(input_path, total_pages, x_range, y_range, num_workers=4):
+    """Parallel load ND2 file by splitting time pages into chunks."""
+    chunk_size = total_pages // num_workers
+    futures = []
+    
+    with ProcessPoolExecutor(max_workers=num_workers) as executor:
+        for i in range(num_workers):
+            start = i * chunk_size
+            end = (i + 1) * chunk_size if i < num_workers - 1 else total_pages
+            futures.append(executor.submit(load_nd2_chunk, input_path, start, end, x_range, y_range))
+        
+        results = [f.result() for f in futures]
+    
+    return np.concatenate(results, axis=0)
 
 
 def load_tif_chunk(input_path, start_page, end_page, x_range, y_range):
@@ -79,12 +91,13 @@ def get_total_pages(input_path, extension):
         with tifffile.TiffFile(input_path) as tif:
             return len(tif.pages)
 
+
 def nd2dim(path_nd2: str, verbose: bool = False) -> tuple:
     """Get dimensions of an ND2 file."""
     if not os.path.isfile(path_nd2):
         raise FileNotFoundError("ND2 file does not exist.")
         
-    with nd2reader.ND2Reader(path_nd2) as images:
+    with ND2Reader(path_nd2) as images:
         # Get first frame and check data type
         first_frame = images.get_frame_2D(c=0, t=0, z=0)
         assert first_frame.dtype in [np.float64, np.uint16], "Unexpected data type"
@@ -105,22 +118,3 @@ def nd2dim(path_nd2: str, verbose: bool = False) -> tuple:
             print(f"x:{x_size}, y:{y_size}, c:{c_size}, t:{t_size}, z:{z_size}")
             
         return (x_size, y_size, z_size, t_size, c_size)
-
-def nd2read(path_nd2: str) -> np.ndarray:
-    """Read ND2 file and return all channels and timepoints."""
-    # Get dimensions
-    x_size, y_size, _, t_size, c_size = nd2dim(path_nd2)
-    
-    # Initialize output array
-    stack = np.zeros((t_size, c_size, x_size, y_size), dtype=np.uint16)
-    
-    with nd2reader.ND2Reader(path_nd2) as images:
-        for t in range(t_size):
-            for c in range(c_size):
-                # Get image for each channel and timepoint
-                img = images.get_frame_2D(c=c, t=t, z=0)
-                
-                # Store in output array
-                stack[t, c, :, :] = img.T
-    
-    return stack
