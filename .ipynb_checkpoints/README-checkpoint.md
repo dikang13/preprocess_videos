@@ -1,9 +1,9 @@
 # Video Preprocessing Pipeline
 
-A Python package for efficient preprocessing of large microscopy video data (>300 GB), optimized for memory efficiency using dask array as well as time efficiency using JAX and CUDA.
+A Python package for efficient preprocessing of large video data (>300 GB), optimized for memory efficiency using dask array as well as time efficiency using JAX and CUDA.
 
 ## Features
-This package processes high-resolution fluorescent microscopy videos with:
+This package processes high-resolution microscopy videos with:
 - Support for ND2/TIF formats and multi-channel 2D/3D images
 - Fixed pattern noise computation and subtraction
 - Configurable pixel binning for enhanced signal and reduced file size
@@ -54,17 +54,16 @@ pip install --upgrade "jax[cuda]" -f https://storage.googleapis.com/jax-releases
 - `--save_as`: Output format ('nrrd' or 'tif')
 - `--gpu`: GPU device number (optional, only if user wants to dedicate a specific GPU to the current run)
 
-### Examples
-#### Processing ND2 Files
+### Examples for processing ND2 Files
 ```bash
 python main.py \
     --input_path /store1/data_raw/2025-01-14/2025-01-14-ZylaBackground.nd2 \
     --output_dir /store1/data_processed/2025-01-14_output \
     --noise_path /store1/data_raw/2025-01-14/avg_noise.tif \
     --chunk_size 256 \
-    --n_z 84 \
-    --x_range 0,966 \
-    --y_range 0,636 \
+    --n_z 100 \
+    --x_range 0,1000 \
+    --y_range 0,800 \
     --z_range 3,80 \
     --channels 1,2 \
     --bitdepth 12 \
@@ -73,27 +72,11 @@ python main.py \
     --gpu 2
 ```
 
-You can also stay with the default parameters for typical 16-minute whole-brain calcium imaging recordings by omitting the optional arguments. 
-After 3x3 binning, all frames will assume a uniform background intensity of 800, which will be subtracted from each superpixel. Final images are clamped to fit in the range of (0, 4096] as 12-bit and exported as NRRD files.
+You can also stay with the default parameters for typical 16-minute whole-brain calcium imaging recordings acquired with Flavell Lab's custom hardware and NIS Elements software by omitting all optional arguments, in which case the following operations will be performed:
+
+After 3x3 binning, a uniform background intensity of 800 is assumed for all frames, which will be subtracted from each superpixel. Each frame is then clamped to fit in the range of (0, 4096] as 12-bit and exported as NRRD files. These operations minimize nonlinear transformations in the preprocessing step while preserving variance in pixel values. Processed images are ready to be passed into pretrained neural networks for segmentation and registration.
 ```bash
 python main.py \
     --input_path /store1/shared/panneuralGFP_SWF1212/data_raw/2025-02-03/2025-02-03-18.nd2 \
     --output_dir /store1/shared/panneuralGFP_SWF1212/data_processed_220/2025-02-03-13_output/neuropal/2025-02-03-18 \
-    --gpu 2
-```
-
-#### Processing TIF Files
-```bash
-python main.py \
-    --input_path /store1/501659/2025-01-23-05_exp7.2ms_fast_ram_16bit.tif \
-    --output_dir /store1/501659/2025-01-23-05_output \
-    --blank_dir /store1/501659/noise_data \
-    --n_z 100 \
-    --x_range 0,968 \
-    --y_range 0,636 \
-    --z_range 3,80 \
-    --channels 1,2 \
-    --bitdepth 12 \
-    --binsize 2 \
-    --save_as tif \
 ```
