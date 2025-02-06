@@ -57,6 +57,7 @@ def preprocess(
     with dask.config.set(**{'array.slicing.split_large_chunks': False}):
         all_frames = all_frames.reshape(all_frames.shape[0] // n_z, n_z, *all_frames.shape[1:])  # [T, Z, C, H, W]
         all_frames = all_frames.transpose(0,2,1,3,4)   # [T, C, Z, H, W]
+        all_frames = all_frames[:,:,z_range, :, :]   # [T, C, Z, H, W] where only z-slices within z_range is taken into consideration
     t_size = all_frames.shape[0]
 
     # Step 2: Process frames in JAX-sized chunks
