@@ -57,9 +57,9 @@ pip install --upgrade "jax[cuda]" -f https://storage.googleapis.com/jax-releases
 ### Examples for processing ND2 Files
 ```bash
 python main.py \
-    --input_path /store1/data_raw/2025-01-14/2025-01-14-ZylaBackground.nd2 \
-    --output_dir /store1/data_processed/2025-01-14_output \
-    --noise_path /store1/data_raw/2025-01-14/avg_noise.tif \
+    --input_path /path/to/raw/nd2 \
+    --output_dir /path/to/processed/output \
+    --blank_dir /path/to/blank/frames/directory \
     --chunk_size 256 \
     --n_z 100 \
     --x_range 0,1000 \
@@ -78,5 +78,5 @@ After 3x3 binning, a uniform background intensity of 800 is assumed for all fram
 ```bash
 python main.py \
     --input_path /store1/shared/panneuralGFP_SWF1212/data_raw/2025-02-03/2025-02-03-18.nd2 \
-    --output_dir /store1/shared/panneuralGFP_SWF1212/data_processed_220/2025-02-03-13_output/neuropal/2025-02-03-18 \
+    --output_dir /store1/shared/panneuralGFP_SWF1212/data_processed_220/2025-02-03-13_output/neuropal/2025-02-03-18
 ```
