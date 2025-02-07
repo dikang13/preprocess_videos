@@ -114,8 +114,6 @@ def preprocess(
 
                         # Extract volume and reorder
                         vol_data = processed_data[t_offset, :, :, :]
-                        vol_data = jnp.transpose(vol_data, axes=(1, 0, 2))
-
                         save_tasks.append((nrrd_path, mip_path, vol_data, spacing))
 
                 elif save_as == 'tif':
