@@ -10,6 +10,7 @@ import jax.numpy as jnp
 import tifffile
 import re
 import dask
+import gc
 from fileio import parallel_save_outputs
 from transform import background_subtract_channels, bin_and_transpose_channels
 from noise import get_avg_noise
@@ -54,7 +55,7 @@ def preprocess(
     n_pages = all_frames.shape[0]
 
     # Reshape into 5D array
-    with dask.config.set(**{'array.slicing.split_large_chunks': False}):
+    with dask.config.set(**{'array.slicing.split_large_chunks': True}):
         all_frames = all_frames.reshape(all_frames.shape[0] // n_z, n_z, *all_frames.shape[1:])  # [T, Z, C, H, W]
         all_frames = all_frames.transpose(0,2,1,3,4)   # [T, C, Z, H, W]
         all_frames = all_frames[:,:,z_range, :, :]   # [T, C, Z, H, W] where only z-slices within z_range is taken into consideration
@@ -69,69 +70,78 @@ def preprocess(
             t_end = min(t_start + chunk_size, t_size)
             current_chunk_size = t_end - t_start
 
-            # Extract chunk from preloaded data
-            chunk_data = all_frames[t_start:t_end].compute() # bring dask chunk into memory
+            # Bring a chunk of dask array into memory
+            chunk_data = jnp.array(all_frames[t_start:t_end].compute(), dtype=jnp.uint16)
             print(f"Processing chunk {chunk_idx+1}/{n_chunks}, shape: {chunk_data.shape}")
 
-            chunk_data = jnp.array(chunk_data, dtype=jnp.int16)
+            # Block JAX until computations are fully done
+            chunk_data.block_until_ready()
 
-            # Apply transformations
-            chunk_data = background_subtract_channels(
-                batch_data_5d=chunk_data,
-                noise_data_3d=noise_data,
-                x_range=x_range,
-                y_range=y_range,
-                bitdepth=bitdepth
-            )
+            # Apply optional transformations
+            if noise_data is not None:
+                chunk_data = background_subtract_channels(
+                    batch_data_5d=chunk_data,
+                    noise_data_3d=noise_data,
+                    x_range=x_range,
+                    y_range=y_range,
+                    bitdepth=bitdepth
+                )
 
-            chunk_data = bin_and_transpose_channels(
-                batch_data_5d=chunk_data,
-                binsize=binsize,
-                bitdepth=bitdepth,
-                subtract_800=subtract_800
-            )
+            if binsize > 1:
+                chunk_data = bin_and_transpose_channels(
+                    batch_data_5d=chunk_data,
+                    binsize=binsize,
+                    bitdepth=bitdepth,
+                    subtract_800=subtract_800
+                )
 
-            # Step 4: Parallelized file output
+            # Step 3: Parallelized file output
+            # Extract prefix once before loops
+            output_path_str = str(output_dir)
+            prefix_matches = re.findall(r'202\d{1}-\d{2}-\d{2}-\d{2}', output_path_str)
+            prefix = prefix_matches[-1] if prefix_matches else ''
+            
+            # Precompute paths for efficiency
+            base_nrrd_path = Path(output_dir) / "NRRD"
+            base_mip_path  = Path(output_dir) / "MIP"
+            base_tif_path  = Path(output_dir)
+            
             n_channels = chunk_data.shape[1]
-            save_tasks = []
-
-            for c in range(n_channels):
-                out = chunk_data[:, c, ...]  # shape [T, Z, H, W]
-
-                if save_as == 'nrrd':
-                    processed_data = out.astype(jnp.uint16)
-                    for t_offset in range(current_chunk_size):
-                        t = t_start + t_offset
-
-                        # Generate filenames
-                        output_path_str = str(output_dir)
-                        prefix_matches = re.findall(r'202\d{1}-\d{2}-\d{2}-\d{2}', output_path_str)
-                        prefix = prefix_matches[-1] if prefix_matches else ''
-                        basename = f"{prefix}_t{t+1:04d}_ch{c+1}"
-
-                        nrrd_path = Path(output_dir) / "NRRD" / f"{basename}.nrrd"
-                        mip_path  = Path(output_dir) / "MIP"  / f"{basename}.png"
-
-                        # Extract volume and reorder
-                        vol_data = processed_data[t_offset, :, :, :]
-                        save_tasks.append((nrrd_path, mip_path, vol_data, spacing))
-
-                elif save_as == 'tif':
-                    processed_data = out.astype(jnp.int16)
-                    out_path = os.path.join(output_dir, f"processed_video_ch{c+1}.tif")
-                    tifffile.imwrite(out_path, processed_data, bigtiff=True)
-                    print(f"Processed video is saved as one tif per channel here: {out_path}")
-
-                else:
-                    raise ValueError("You must save the output as either 'tif' or 'nrrd'!")
-
-                del out, processed_data  # Free memory
+            
+            # Generate save tasks for NRRD since each channel of each time point is to be saved as a separate file
+            if save_as == 'nrrd':
+                save_tasks = [
+                    (
+                        base_nrrd_path / f"{prefix}_t{t_start + t_offset + 1:04d}_ch{c+1}.nrrd",
+                        base_mip_path  / f"{prefix}_t{t_start + t_offset + 1:04d}_ch{c+1}.png",
+                        chunk_data[:, c, ...].astype(jnp.uint16)[t_offset, :, :, :],  # Extract volume
+                        spacing
+                    )
+                    for c in range(n_channels)
+                    for t_offset in range(current_chunk_size)
+                ]
+            
+            # Process and save one TIF file for each channel
+            elif save_as == 'tif':
+                for c in range(n_channels):
+                    processed_data = chunk_data[:, c, ...].astype(jnp.int16)
+                    tif_path = base_tif_path / f"processed_video_ch{c+1}.tif"
+                    
+                    # Save TIF (big format)
+                    tifffile.imwrite(tif_path, processed_data, bigtiff=True)
+                    print(f"Processed video is saved as one TIF per channel here: {tif_path}")
+            
+            else:
+                raise ValueError("You must save the output as either 'tif' or 'nrrd'!")
 
             # Execute saving in parallel
             list(pool.map(parallel_save_outputs, save_tasks))
 
-            del chunk_data  # Free memory
-    del all_frames  # Clear major chunk from memory
+            # Explicitly delete unused arrays
+            del chunk_data
+            jax.clear_caches()  # Releases compiled functions and frees GPU memory
+            gc.collect()  # Ensures Python releases memory   
+            print(f"Finished processing chunk {chunk_idx+1}/{n_chunks}")
 
 
 def main():
@@ -170,7 +180,7 @@ def main():
                         help='Final voxel dimension for saving (e.g. NRRD).')
     
     # Performance settings
-    parser.add_argument('--chunk_size', type=int, default=50,
+    parser.add_argument('--chunk_size', type=int, default=20,
                         help='Timepoints (volumes) to process per chunk.')
     parser.add_argument('--gpu', type=int, default=2,
                         help='GPU device number to use.')
