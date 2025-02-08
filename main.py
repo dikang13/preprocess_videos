@@ -93,7 +93,7 @@ def preprocess(
         
         # chunk_data = chunk_data.block_until_ready()  # Ensure JAX computation finishes before NumPy reads from it
         chunk_data_np = np.array(chunk_data)  # Convert to NumPy for file saving
-        del chunk_data
+        # del chunk_data
         
         # Parallel NRRD saving
         if save_as == 'nrrd':
@@ -107,7 +107,7 @@ def preprocess(
                 for t_offset in range(current_chunk_size)
                 for c in range(n_channels)
             ]
-            batch_save_nrrd(tasks, num_workers=8)  # Adjust workers based on CPU
+            batch_save_nrrd(tasks, num_workers=16)  # Adjust workers based on CPU
         
         # Parallel TIF saving
         elif save_as == 'tif':
@@ -118,11 +118,11 @@ def preprocess(
                 )
                 for c in range(n_channels)
             ]            
-            batch_save_tif(tasks, num_workers=8)
+            batch_save_tif(tasks, num_workers=4)
         else:
             raise ValueError("You must save the output as either 'tif' or 'nrrd'!")           
         print(f"Finished processing chunk {chunk_idx+1}/{n_chunks} of shape {chunk_data_np.shape}")
-        del chunk_data_np
+        # del chunk_data_np
 
         
 def main():
