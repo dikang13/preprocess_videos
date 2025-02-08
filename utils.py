@@ -1,5 +1,5 @@
 import argparse
-import subprocess
+import ast
 
 def parse_slice(slice_str):
     """Convert string of format 'start,end' to a slice object"""
@@ -19,12 +19,13 @@ def parse_list(list_str):
     except:
         raise argparse.ArgumentTypeError("List must be in format '[1,2]' or '1,2'")
 
-def parse_float_list(list_str):
-    """Convert string of format '[x,y,z]' or 'x,y,z' to a list of floats"""
+def parse_float_list(value):
+    """Parses a string representing a nested list of floats."""
     try:
-        # Remove brackets and split by comma
-        values = list_str.strip('[]').split(',')
-        # Convert to floats
-        return [float(x.strip()) for x in values]
-    except:
-        raise argparse.ArgumentTypeError("List must be in format '[0.54,0.54,0.54]' or '0.54,0.54,0.54'")
+        parsed_value = ast.literal_eval(value)  # Safely evaluate the string into a Python list
+        if isinstance(parsed_value, list) and all(isinstance(row, list) and all(isinstance(num, (int, float)) for num in row) for row in parsed_value):
+            return parsed_value  # Return as List of lists
+        else:
+            raise ValueError
+    except (SyntaxError, ValueError):
+        raise argparse.ArgumentTypeError("Invalid format. Expected a list of lists, e.g., '[[0.54, 0, 0], [0, 0.54, 0], [0, 0, 0.54]]'")
