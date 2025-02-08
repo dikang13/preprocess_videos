@@ -93,7 +93,7 @@ def preprocess(
         
         # chunk_data = chunk_data.block_until_ready()  # Ensure JAX computation finishes before NumPy reads from it
         chunk_data_np = np.array(chunk_data)  # Convert to NumPy for file saving
-        # del chunk_data
+        del chunk_data
         
         # Parallel NRRD saving
         if save_as == 'nrrd':
@@ -122,6 +122,7 @@ def preprocess(
         else:
             raise ValueError("You must save the output as either 'tif' or 'nrrd'!")           
         print(f"Finished processing chunk {chunk_idx+1}/{n_chunks} of shape {chunk_data_np.shape}")
+        del chunk_data_np
 
         
 def main():
@@ -155,7 +156,7 @@ def main():
                         help='Final voxel dimension for saving (e.g. NRRD).')
     
     # Performance settings
-    parser.add_argument('--chunk_size', type=int, default=16,
+    parser.add_argument('--chunk_size', type=int, default=20,
                         help='Timepoints (volumes) to process per chunk.')
     parser.add_argument('--gpu', type=int, default=3,
                         help='GPU device number to use.')
