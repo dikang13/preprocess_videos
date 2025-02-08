@@ -1,9 +1,5 @@
 import argparse
 import subprocess
-import multiprocessing
-
-# Constants for optimization
-THREAD_POOL_SIZE = max(1, multiprocessing.cpu_count()/2) # Dedicate half of the number of cores to this task
 
 def parse_slice(slice_str):
     """Convert string of format 'start,end' to a slice object"""

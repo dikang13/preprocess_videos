@@ -1,7 +1,6 @@
 import os
 import argparse
 from pathlib import Path
-from concurrent.futures import ThreadPoolExecutor
 from tqdm import tqdm
 import numpy as np
 import nd2
@@ -10,138 +9,114 @@ import jax.numpy as jnp
 import tifffile
 import re
 import dask
-import gc
+import dask.array as da
 from fileio import parallel_save_outputs
-from transform import background_subtract_channels, bin_and_transpose_channels
-from noise import get_avg_noise
-from utils import parse_slice, parse_list, parse_float_list, THREAD_POOL_SIZE
+from process import process_images
+from noise import get_avg_noise, compute_uniform_noise_data
+from utils import parse_slice, parse_list, parse_float_list
+
+# Create JIT-compiled version for JAX operations
+process_images_jit = jax.jit(process_images, static_argnames=['bitdepth', 'binsize'])
 
 def preprocess(
-    input_path, output_dir, noise_path, blank_dir,
+    input_path, output_dir, 
+    noise_path, blank_dir, bg_percentile,
     chunk_size,
-    n_z, x_range, y_range, z_range, channels,
+    n_z, z_range,
     bitdepth,
     binsize,
     save_as,
     spacing
 ):
-        
-    # Load or prepare noise data
+    """Optimized preprocessing pipeline for JAX and Dask."""
+    # Load noise data if a .tif file is provided, or compute noise by averaging frames in blank_dir
     noise_data = None
-    subtract_800 = False
     if noise_path:
         noise_data = jnp.array(tifffile.imread(str(noise_path)), dtype=jnp.uint16)
         print(f"Loaded noise data of shape {noise_data.shape} from {noise_path}")
     elif blank_dir:
-        noise_data, savepath = get_avg_noise(blank_dir, x_range, y_range)
-        print(f"Computed noise data of shape {noise_data.shape} by averaging all frames in {blank_dir}. "
-              f"In the future, you can reuse this noise data by setting noise_path to {savepath}")
+        noise_data, savepath = get_avg_noise(blank_dir)
+        print(f"Computed noise data of shape {noise_data.shape} by averaging frames from {blank_dir}.")
     else:
-        # if background subtraction is not performed, the lowest superpixel value will be ~900, which needs to be subtracted 
-        subtract_800 = True
-        print("IMPORTANT: Neither noise_path nor blank_dir is provided. Background is assumed to be 800 for all binned superpixels.")
-        
-    # Create output directories if saving as NRRD
+        print("⚠️⚠️⚠️ Warning: No blank frames provided. Assuming uniform background for all pixels. ⚠️⚠️⚠️")
+
+    # Create output directories
     if save_as == "nrrd":
-        nrrd_dir = Path(output_dir) / "NRRD"
-        mip_dir = Path(output_dir) / "MIP"
-        nrrd_dir.mkdir(parents=True, exist_ok=True)
-        mip_dir.mkdir(parents=True, exist_ok=True)
-    
-    # Step 1: Load all frames into CPU memory at once as dask array   
+        Path(output_dir, "NRRD").mkdir(parents=True, exist_ok=True)
+        Path(output_dir, "MIP").mkdir(parents=True, exist_ok=True)
+
+    # Step 1: Load ND2 data as a lazy Dask array
     with nd2.ND2File(input_path) as nd2_file:
-        all_frames = nd2_file.to_dask()
-    nd2_file.close()
+        all_frames = nd2_file.to_dask() # [T*Z, C, X, Y]
     n_pages = all_frames.shape[0]
 
-    # Reshape into 5D array
-    with dask.config.set(**{'array.slicing.split_large_chunks': True}):
-        all_frames = all_frames.reshape(all_frames.shape[0] // n_z, n_z, *all_frames.shape[1:])  # [T, Z, C, H, W]
-        all_frames = all_frames.transpose(0,2,1,3,4)   # [T, C, Z, H, W]
-        all_frames = all_frames[:,:,z_range, :, :]   # [T, C, Z, H, W] where only z-slices within z_range is taken into consideration
-    t_size = all_frames.shape[0]
+    # Reshape Dask array for chunking
+    with dask.config.set(**{'array.slicing.split_large_chunks': False}):
+        all_frames = all_frames.reshape(n_pages // n_z, n_z, *all_frames.shape[1:]).transpose(0, 2, 1, 3, 4)
+        all_frames = all_frames[:, :, z_range, :, :] # ignore the z-slices with lots of motion artifacts
+        # all_frames is now a 5d array in [T, C, Z, X, Y]
 
-    # Step 2: Process frames in JAX-sized chunks
+    t_size = all_frames.shape[0]
+    n_channels = all_frames.shape[1]
+    n_x = all_frames.shape[-2]
+    n_y = all_frames.shape[-1]
     n_chunks = (t_size + chunk_size - 1) // chunk_size
 
-    with ThreadPoolExecutor(max_workers=THREAD_POOL_SIZE) as pool:
-        for chunk_idx in tqdm(range(n_chunks)):
-            t_start = chunk_idx * chunk_size
-            t_end = min(t_start + chunk_size, t_size)
-            current_chunk_size = t_end - t_start
+    # Use multithreading for jax array computations and file saving
+    for chunk_idx in tqdm(range(n_chunks)):
+        t_start = chunk_idx * chunk_size
+        t_end = min(t_start + chunk_size, t_size)
+        current_chunk_size = t_end - t_start
 
-            # Bring a chunk of dask array into memory
-            chunk_data = jnp.array(all_frames[t_start:t_end].compute(), dtype=jnp.uint16)
-            print(f"Processing chunk {chunk_idx+1}/{n_chunks}, shape: {chunk_data.shape}")
+        # Bring a small chunk of the Dask array to RAM
+        chunk_data = jnp.array(all_frames[t_start:t_end].compute(), dtype=jnp.uint16)
 
-            # Block JAX until computations are fully done
-            chunk_data.block_until_ready()
+        # If blank frames are not passed in, a uniform background assumed for subtraction
+        if noise_data is None:
+            noise_data = compute_uniform_noise_data(chunk_data[0], bg_percentile)
+            
+        # Apply transformations
+        chunk_data = process_images_jit(chunk_data, noise_data, bitdepth, binsize)
 
-            # Apply optional transformations
-            if noise_data is not None:
-                chunk_data = background_subtract_channels(
-                    batch_data_5d=chunk_data,
-                    noise_data_3d=noise_data,
-                    x_range=x_range,
-                    y_range=y_range,
-                    bitdepth=bitdepth
+        output_path_str = str(output_dir)
+        prefix = re.findall(r'202\d{1}-\d{2}-\d{2}-\d{2}', output_path_str)
+        prefix = prefix[-1] if prefix else ''
+        base_nrrd_path = Path(output_dir) / "NRRD"
+        base_mip_path = Path(output_dir) / "MIP"
+        base_tif_path = Path(output_dir)
+    
+        if save_as == 'nrrd':
+            # Optimize Dask delayed execution by flattening loops
+            save_tasks = [
+                dask.delayed(parallel_save_outputs)(
+                    base_nrrd_path / f"{prefix}_t{t_start + t_offset + 1:04d}_ch{c+1}.nrrd",
+                    base_mip_path / f"{prefix}_t{t_start + t_offset + 1:04d}_ch{c+1}.png",
+                    chunk_data[t_offset, c, ...].astype(jnp.uint16),  # Directly extract per-channel volume
+                    spacing
                 )
-
-            if binsize > 1:
-                chunk_data = bin_and_transpose_channels(
-                    batch_data_5d=chunk_data,
-                    binsize=binsize,
-                    bitdepth=bitdepth,
-                    subtract_800=subtract_800
+                for t_offset in range(current_chunk_size)
+                for c in range(n_channels)  # Flatten the loop for better Dask performance
+            ]
+            
+            # Trigger Dask computation
+            dask.compute(*save_tasks)
+    
+        elif save_as == 'tif':
+            # Use ThreadPoolExecutor to save TIFs in parallel
+            def save_tif(c):
+                tifffile.imwrite(
+                    base_tif_path / f"processed_video_ch{c+1}.tif",
+                    chunk_data[:, c, ...].astype(jnp.int16),
+                    bigtiff=True
                 )
-
-            # Step 3: Parallelized file output
-            # Extract prefix once before loops
-            output_path_str = str(output_dir)
-            prefix_matches = re.findall(r'202\d{1}-\d{2}-\d{2}-\d{2}', output_path_str)
-            prefix = prefix_matches[-1] if prefix_matches else ''
+    
+            with ThreadPoolExecutor(max_workers=8) as executor:  # Adjust based on CPU availability
+                executor.map(save_tif, range(n_channels))
+    
+        else:
+            raise ValueError("You must save the output as either 'tif' or 'nrrd'!")
             
-            # Precompute paths for efficiency
-            base_nrrd_path = Path(output_dir) / "NRRD"
-            base_mip_path  = Path(output_dir) / "MIP"
-            base_tif_path  = Path(output_dir)
-            
-            n_channels = chunk_data.shape[1]
-            
-            # Generate save tasks for NRRD since each channel of each time point is to be saved as a separate file
-            if save_as == 'nrrd':
-                save_tasks = [
-                    (
-                        base_nrrd_path / f"{prefix}_t{t_start + t_offset + 1:04d}_ch{c+1}.nrrd",
-                        base_mip_path  / f"{prefix}_t{t_start + t_offset + 1:04d}_ch{c+1}.png",
-                        chunk_data[:, c, ...].astype(jnp.uint16)[t_offset, :, :, :],  # Extract volume
-                        spacing
-                    )
-                    for c in range(n_channels)
-                    for t_offset in range(current_chunk_size)
-                ]
-            
-            # Process and save one TIF file for each channel
-            elif save_as == 'tif':
-                for c in range(n_channels):
-                    processed_data = chunk_data[:, c, ...].astype(jnp.int16)
-                    tif_path = base_tif_path / f"processed_video_ch{c+1}.tif"
-                    
-                    # Save TIF (big format)
-                    tifffile.imwrite(tif_path, processed_data, bigtiff=True)
-                    print(f"Processed video is saved as one TIF per channel here: {tif_path}")
-            
-            else:
-                raise ValueError("You must save the output as either 'tif' or 'nrrd'!")
-
-            # Execute saving in parallel
-            list(pool.map(parallel_save_outputs, save_tasks))
-
-            # Explicitly delete unused arrays
-            del chunk_data
-            jax.clear_caches()  # Releases compiled functions and frees GPU memory
-            gc.collect()  # Ensures Python releases memory   
-            print(f"Finished processing chunk {chunk_idx+1}/{n_chunks}")
+        print(f"Finished processing chunk {chunk_idx+1}/{n_chunks} of shape {chunk_data.shape}")
 
 
 def main():
@@ -149,14 +124,15 @@ def main():
     
     # Input/Output paths
     parser.add_argument('--input_path', type=str, required=True,
-                        help='Input file path, e.g., /path/to/data.nd2')
+                        help='Input file path, e.g. /store1/shared/panneuralGFP_SWF1212/data_raw/2025-02-03/2025-02-03-18.nd2')
     parser.add_argument('--output_dir', type=str, required=True,
-                        help='Output directory, e.g., /path/to/output')
+                        help='Output directory, e.g. /store1/shared/panneuralGFP_SWF1212/data_processed/2025-02-03-13_output/neuropal/2025-02-03-18')
     parser.add_argument('--noise_path', type=str, default=None,
-                        help='Path to noise reference file')
+                        help='Path to noise reference file, e.g. /storage/fs/store1/shared/confocal_debugging/avg_noise.tif')
     parser.add_argument('--blank_dir', type=str, default=None,
-                        help='Folder path to multiple blank images acquired when camera is capped')
-    
+                        help='Folder path to blank images with no samples, e.g. /storage/fs/store1/shared/confocal_debugging/data_raw/2025-02-blank-frames')
+    parser.add_argument('--bg_percentile', type=int, default=10,
+                        help='The percentile of pixel intensity in the first few frames below which all values are subtracted as background')                        
     # Processing parameters
     parser.add_argument('--save_as', type=str, default='nrrd', choices=['nrrd', 'tif'],
                         help='File extension for outputs')
@@ -168,21 +144,15 @@ def main():
     # Image dimensions
     parser.add_argument('--n_z', type=int, default=80,
                         help='Number of z-slices per volume/timepoint.')
-    parser.add_argument('--x_range', type=parse_slice, default='0,966',
-                        help='Start,end range along x dimension.')
-    parser.add_argument('--y_range', type=parse_slice, default='0,630',
-                        help='Start,end range along y dimension.')
     parser.add_argument('--z_range', type=parse_slice, default='3,80',
-                        help='Start,end range of z-slices to include.')
-    parser.add_argument('--channels', type=parse_list, default='1,2',
-                        help='Channels to process as "1,2" or "[1,2]"')
+                        help='Start,end range of z-slices to be included.')
     parser.add_argument('--spacing', type=parse_float_list, default='0.54,0.54,0.54',
                         help='Final voxel dimension for saving (e.g. NRRD).')
     
     # Performance settings
-    parser.add_argument('--chunk_size', type=int, default=20,
+    parser.add_argument('--chunk_size', type=int, default=16,
                         help='Timepoints (volumes) to process per chunk.')
-    parser.add_argument('--gpu', type=int, default=2,
+    parser.add_argument('--gpu', type=int, default=3,
                         help='GPU device number to use.')
 
     args = parser.parse_args()
@@ -196,12 +166,10 @@ def main():
         output_dir=args.output_dir,
         noise_path=args.noise_path,
         blank_dir=args.blank_dir,
+        bg_percentile=args.bg_percentile,
         chunk_size=args.chunk_size,
         n_z=args.n_z,
-        x_range=args.x_range,
-        y_range=args.y_range,
         z_range=args.z_range,
-        channels=args.channels,
         bitdepth=args.bitdepth,
         binsize=args.binsize,
         save_as=args.save_as,

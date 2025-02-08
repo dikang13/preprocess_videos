@@ -37,6 +37,13 @@ pip install -r requirements.txt
 pip install --upgrade "jax[cuda]" -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
 ```
 
+For Flavell Lab users on c2, c3 or c4, the shortcut is to activate a tested virtual environment depending on which server you are on:
+```bash
+# Activate virtual environment
+python -m venv c*_env
+source c*_env/bin/activate
+```
+
 ## User-specified parameters
 
 - `--input_path`: Path to input file (.nd2 or .tif)

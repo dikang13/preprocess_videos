@@ -5,13 +5,10 @@ import nrrd
 from pathlib import Path
 from concurrent.futures import ProcessPoolExecutor
 
-def parallel_save_outputs(save_args):
-    """Save NRRD output files in parallel"""
-    nrrd_path, mip_path, vol_data, spacing = save_args
-    
+def parallel_save_outputs(nrrd_path, mip_path, vol_data, spacing):
     # Prepare NRRD header attributes
     header = {
-        'type': 'uint16',
+        'type': 'int16',
         'dimension': 3,
         'space': 'left-posterior-superior',
         'sizes': [vol_data.shape[0], vol_data.shape[1], vol_data.shape[2]],
@@ -31,7 +28,7 @@ def parallel_save_outputs(save_args):
     # Save MIP, overwriting if exists
     if mip_path.exists():
         mip_path.unlink()  # Delete existing file
-    mip = np.max(vol_data, axis=2).astype(np.uint16)
+    mip = np.max(vol_data, axis=2).astype(np.int16)
     tifffile.imwrite(str(mip_path), mip)
 
 
@@ -41,7 +38,7 @@ def load_nd2_chunk(input_path, start_page, end_page, x_range, y_range):
     c_size = images.sizes['c']
     
     t_len = end_page - start_page
-    data = np.empty((t_len, c_size, y_range.stop, x_range.stop), dtype=np.uint16)
+    data = np.empty((t_len, c_size, y_range.stop, x_range.stop), dtype=np.int16)
 
     for t_idx, t in enumerate(range(start_page, end_page)):
         for c in range(c_size):
