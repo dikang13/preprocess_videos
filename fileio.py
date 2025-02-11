@@ -2,7 +2,7 @@ from pathlib import Path
 import nrrd
 import numpy as np
 import tifffile
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ThreadPoolExecutor
 
 def save_nrrd(nrrd_path, mip_path, vol_data, spacing):
     """Saves NRRD and MIP files in parallel."""
@@ -29,9 +29,9 @@ def save_nrrd(nrrd_path, mip_path, vol_data, spacing):
     tifffile.imwrite(str(mip_path), mip) # MIP exported as PNGs instead of NRRDs
 
 
-def batch_save_nrrd(tasks, num_workers=8):
+def batch_save_nrrd(tasks, num_workers):
     """Executes parallel file saving tasks using multithreading."""
-    with ProcessPoolExecutor(max_workers=num_workers) as executor:
+    with ThreadPoolExecutor(max_workers=num_workers) as executor:
         executor.map(lambda task: save_nrrd(*task), tasks)
 
 
@@ -43,9 +43,9 @@ def save_tif(tif_path, vol_data):
         bigtiff=True  # Support large files
     )
 
-def batch_save_tif(tasks, num_workers=8):
+def batch_save_tif(tasks, num_workers):
     """Executes parallel TIFF saving tasks using multithreading."""
-    with ProcessPoolExecutor(max_workers=num_workers) as executor:
+    with ThreadPoolExecutor(max_workers=num_workers) as executor:
         executor.map(lambda task: save_tif(*task), tasks)
 
 

@@ -3,7 +3,7 @@ import argparse
 from pathlib import Path
 from tqdm import tqdm
 import numpy as np
-from nd2 import ND2File
+import nd2
 import jax
 import jax.numpy as jnp
 import tifffile
@@ -22,7 +22,7 @@ subtract_bg_jit = jax.jit(subtract_bg)
 def preprocess(
     input_path, output_dir, 
     noise_path, blank_dir, bg_percentile,
-    chunk_size,
+    chunk_size, num_workers,
     n_z, z_range,
     bitdepth,
     binsize,
@@ -55,7 +55,7 @@ def preprocess(
         base_tif_path = Path(output_dir)
 
     # Load ND2 data as a lazy Dask array
-    with ND2File(input_path) as nd2_file:
+    with nd2.ND2File(input_path) as nd2_file:
         all_frames = nd2_file.to_dask() # 4D array (T*Z, C, X, Y)
     n_pages = all_frames.shape[0]
 
@@ -91,7 +91,7 @@ def preprocess(
         chunk_data = jnp.clip(chunk_data, 0, 2 ** bitdepth)
         chunk_data = jnp.transpose(chunk_data, axes=(0,1,4,3,2))  # Clip values & Rearrange axes
         
-        # chunk_data = chunk_data.block_until_ready()  # Ensure JAX computation finishes before NumPy reads from it
+        chunk_data = chunk_data.block_until_ready()  # Ensure JAX computation finishes before NumPy reads from it
         chunk_data_np = np.array(chunk_data)  # Convert to NumPy for file saving
         # del chunk_data
         
@@ -107,7 +107,7 @@ def preprocess(
                 for t_offset in range(current_chunk_size)
                 for c in range(n_channels)
             ]
-            batch_save_nrrd(tasks, num_workers=16)  # Adjust workers based on CPU
+            batch_save_nrrd(tasks, num_workers)  # Adjust workers based on CPU
         
         # Parallel TIF saving
         elif save_as == 'tif':
@@ -118,11 +118,11 @@ def preprocess(
                 )
                 for c in range(n_channels)
             ]            
-            batch_save_tif(tasks, num_workers=4)
+            batch_save_tif(tasks, num_workers)
         else:
             raise ValueError("You must save the output as either 'tif' or 'nrrd'!")           
         print(f"Finished processing chunk {chunk_idx+1}/{n_chunks} of shape {chunk_data_np.shape}")
-        # del chunk_data_np
+        del chunk_data_np
 
         
 def main():
@@ -158,6 +158,8 @@ def main():
     # Performance settings
     parser.add_argument('--chunk_size', type=int, default=20,
                         help='Timepoints (volumes) to process per chunk.')
+    parser.add_argument('--num_workers', type=int, default=256,
+                        help='Number of workers for parallel file IO.')    
     parser.add_argument('--gpu', type=int, default=3,
                         help='GPU device number to use.')
 
@@ -174,6 +176,7 @@ def main():
         blank_dir=args.blank_dir,
         bg_percentile=args.bg_percentile,
         chunk_size=args.chunk_size,
+        num_workers=args.num_workers,
         n_z=args.n_z,
         z_range=args.z_range,
         bitdepth=args.bitdepth,
