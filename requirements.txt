@@ -5,10 +5,10 @@ dask==2024.8.0
 fsspec==2025.2.0
 imageio==2.37.0
 importlib_metadata==8.6.1
-jax==0.4.30
-jax-cuda12-pjrt==0.4.30
-jax-cuda12-plugin==0.4.30
-jaxlib==0.4.30
+jax==0.5.0
+jax-cuda12-pjrt==0.5.0
+jax-cuda12-plugin==0.5.0
+jaxlib==0.5.0
 locket==1.0.0
 ml_dtypes==0.5.1
 nd2==0.10.1
@@ -30,6 +30,7 @@ packaging==24.2
 partd==1.4.2
 pillow==11.1.0
 PIMS==0.7
+psutil==5.9.0
 pydantic==2.10.6
 pydantic-compat==0.1.2
 pydantic_core==2.27.2

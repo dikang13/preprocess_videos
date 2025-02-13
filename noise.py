@@ -75,21 +75,22 @@ def compute_uniform_noise_data(chunk_data, bg_percentile):
     Compute a uniform background value for each channel based on a given percentile.
 
     Parameters:
-    - chunk_data: jnp.array of shape (C, Z, X, Y)
+    - chunk_data: jnp.array of shape (T, C, Z, X, Y)
     - bg_percentile: float, percentile value to compute background.
 
     Returns:
     - noise_data: jnp.array of shape (C, X, Y)
     """
-    n_channels, n_z, n_x, n_y = chunk_data.shape  # [C, Z, X, Y]
+    n_t, n_channels, n_z, n_x, n_y = chunk_data.shape  # [T, C, Z, X, Y]
+    frame_data = jnp.mean(chunk_data, axis=(0,1))  # [C, X, Y]
 
     # Vectorized function to compute percentile per channel
     def compute_uniform_bg(c):
-        uniform_bg = jnp.percentile(chunk_data[c, ...], bg_percentile)  # Returns scalar
+        uniform_bg = jnp.percentile(frame_data[c, ...], bg_percentile)  # Returns scalar
         uniform_bg = jnp.rint(uniform_bg).astype(jnp.int16)
         return uniform_bg
 
     noise_values = jax.vmap(compute_uniform_bg)(jnp.arange(n_channels))  # Shape: (C,)
     noise_data = jnp.broadcast_to(noise_values[:, None, None], (n_channels, n_x, n_y))
 
-    return noise_data
+    return noise_data # [C, X, Y]

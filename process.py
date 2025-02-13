@@ -80,7 +80,7 @@ def bin_xy(data, binsize):
     return data_binned
 
 
-def subtract_bg(chunk_data, noise_data):
+def subtract_bg(chunk_data, noise_data, bitdepth):
     """
     Subtract background jnp array from real data jnp array, where (C, X, Y) dimensions are matching in size
 
@@ -94,6 +94,8 @@ def subtract_bg(chunk_data, noise_data):
     # assert chunk_data.shape[-2:] == noise_data.shape[-2:], "Real data and noise data should have identical XY dimensions"   
     
     noise_expanded = jnp.expand_dims(noise_data, axis=(0, 2)) # (C, X, Y) -> (1, C, 1, X, Y)
+    noise_subtracted = chunk_data - noise_expanded # matched to (T, C, Z, X, Y)
+    clipped = jnp.clip(noise_subtracted, 0, 2 ** bitdepth) # Clip values to fit in bit range
     
-    return chunk_data - noise_expanded # matched to (T, C, Z, X, Y)
+    return jnp.transpose(clipped, axes=(0,1,4,3,2)) # Rearrange axes
     

@@ -37,13 +37,6 @@ pip install -r requirements.txt
 pip install --upgrade "jax[cuda]" -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
 ```
 
-For Flavell Lab users on c2, c3 or c4, the shortcut is to activate a tested virtual environment depending on which server you are on:
-```bash
-# Activate virtual environment
-python -m venv c*_env
-source c*_env/bin/activate
-```
-
 ## User-specified parameters
 
 - `--input_path`: Path to input file (.nd2 or .tif)
@@ -61,7 +54,7 @@ source c*_env/bin/activate
 - `--save_as`: Output format ('nrrd' or 'tif')
 - `--gpu`: GPU device number (optional, only if user wants to dedicate a specific GPU to the current run)
 
-### Examples for processing ND2 Files
+### Examples for processing individual ND2 Files
 ```bash
 python main.py \
     --input_path /path/to/raw/nd2 \
@@ -84,6 +77,24 @@ You can also stay with the default parameters for typical 16-minute whole-brain 
 After 3x3 binning, a uniform background intensity of 800 is assumed for all frames, which will be subtracted from each superpixel. Each frame is then clamped to fit in the range of (0, 4096] as 12-bit and exported as NRRD files. These operations minimize nonlinear transformations in the preprocessing step while preserving variance in pixel values. Processed images are ready to be passed into pretrained neural networks for segmentation and registration.
 ```bash
 python main.py \
-    --input_path /store1/shared/panneuralGFP_SWF1212/data_raw/2025-02-03/2025-02-03-18.nd2 \
-    --output_dir /store1/shared/panneuralGFP_SWF1212/data_processed_220/2025-02-03-13_output/neuropal/2025-02-03-18
+    --input_path /store1/shared/panneuralGFP_SWF1212/data_raw/2025-02-06/2025-02-06-01.nd2 \
+    --output_dir /store1/shared/panneuralGFP_SWF1212/data_processed/2025-02-06-01_output
 ```
+
+### Examples for processing multiple ND2 Files at once
+```bash
+python main.py \
+    --input_path /store1/shared/panneuralGFP_SWF1212/data_raw/2025-02-06/2025-02-06-01.nd2 \
+    --output_dir /store1/shared/panneuralGFP_SWF1212/data_processed/2025-02-06-01_output && \
+python main.py \
+    --input_path /store1/shared/panneuralGFP_SWF1212/data_raw/2025-02-06/2025-02-06-02.nd2 \
+    --output_dir /store1/shared/panneuralGFP_SWF1212/data_processed/2025-02-06-01_output/neuropal/2025-02-06-02 && \    
+python main.py \
+    --input_path /store1/shared/panneuralGFP_SWF1212/data_raw/2025-02-06/2025-02-06-03.nd2 \
+    --output_dir /store1/shared/panneuralGFP_SWF1212/data_processed/2025-02-06-01_output/neuropal/2025-02-06-03 && \    
+python main.py \
+    --input_path /store1/shared/panneuralGFP_SWF1212/data_raw/2025-02-06/2025-02-06-04.nd2 \
+    --output_dir /store1/shared/panneuralGFP_SWF1212/data_processed/2025-02-06-01_output/neuropal/2025-02-06-04   
+```
+
+Alternatively, edit 
