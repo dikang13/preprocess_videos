@@ -85,8 +85,10 @@ def preprocess(
         t_end = min(t_start + chunk_size, t_size)
         current_chunk_size = t_end - t_start
 
-        # Bring a small chunk of the Dask array to RAM        
-        chunk_data = jnp.array(all_frames[t_start:t_end].compute())
+        # Bring a small chunk of the Dask array to RAM
+        temp = all_frames[t_start:t_end].compute()
+        chunk_data = jnp.array(temp)
+        del temp
         # print_mem_usage("After chunk from dask to mem")
 
         # If blank frames are not passed in, a uniform background assumed for subtraction
@@ -163,9 +165,9 @@ def main():
                         help='Final voxel dimension for saving (e.g. NRRD).')
     
     # Performance settings
-    parser.add_argument('--chunk_size', type=int, default=20,
+    parser.add_argument('--chunk_size', type=int, default=16,
                         help='Timepoints (volumes) to process per chunk.')
-    parser.add_argument('--num_workers', type=int, default=32,
+    parser.add_argument('--num_workers', type=int, default=16,
                         help='Number of workers for parallel file IO.')    
     parser.add_argument('--gpu', type=int, default=3,
                         help='GPU device number to use.')
