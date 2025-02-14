@@ -97,4 +97,27 @@ python main.py \
     --output_dir /store1/shared/panneuralGFP_SWF1212/data_processed/2025-02-06-01_output/neuropal/2025-02-06-04   
 ```
 
-Alternatively, edit 
+Alternatively, attach a `metadata.txt` in your input directory, and submit multiple nd2 files by running the script `submit_multi.sh`.
+Here is an example of the metadata file, which defines all the immobilized recordings affiliated with each freely moving recording:
+```bash
+"2025-02-10-01":
+{
+all_red = "2025-02-10-02"
+mNeptune = "2025-02-10-03"
+OFP = "2025-02-10-04"
+BFP = "2025-02-10-05"
+}
+
+"2025-02-10-06":
+{
+```
+
+Here is the an example command line to submit all nd2 files specified in `metadata.txt` sequentially:
+```bash
+./submit_multi.sh \
+    --date "2025-02-10" \
+    --input_base "/store1/shared/panneuralGFP_SWF1212/data_raw"\
+    --output_base "/store1/shared/panneuralGFP_SWF1212/data_processed"
+```
+
+This will first return all the commands that call `main.py`, then execute them one by one.

@@ -16,8 +16,6 @@ from noise import get_noise_data, compute_uniform_noise_data
 from utils import parse_slice, parse_list, parse_float_list, print_mem_usage
 import gc
 import psutil
-import sys
-import asyncio
 
 # Create JIT-compiled version for JAX operations
 bin_xy_jit = jax.jit(bin_xy, static_argnames=['binsize'])
