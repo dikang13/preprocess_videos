@@ -11,15 +11,20 @@ import re
 import dask
 import dask.array as da
 from fileio import batch_save_tif, batch_save_nrrd
-from process import bin_xy, subtract_bg
+from process import bin_and_subtract, bin_xy
 from noise import get_noise_data, compute_uniform_noise_data
-from utils import parse_slice, parse_list, parse_float_list, print_mem_usage
+from utils import parse_slice, parse_list, parse_float_list
 import gc
 import psutil
 
 # Create JIT-compiled version for JAX operations
 bin_xy_jit = jax.jit(bin_xy, static_argnames=['binsize'])
-subtract_bg_jit = jax.jit(subtract_bg, static_argnames=['bitdepth'])
+# subtract_bg_jit = jax.jit(subtract_bg, static_argnames=['bitdepth'])
+bin_and_subtract_jit = jax.jit(bin_and_subtract, static_argnames=['binsize', 'bitdepth'])
+
+def print_mem_usage(label):
+    process = psutil.Process(os.getpid())
+    print(f"[{label}] Memory usage: {process.memory_info().rss / 1024 ** 2:.2f} MB")
 
 def preprocess(
     input_path, output_dir, 
@@ -56,9 +61,7 @@ def preprocess(
         # base_mip_path = Path(output_dir) / "MIP"
     else: # .tif or .tiff
         base_tif_path = Path(output_dir)
-
-    # print_mem_usage("Before nd2 to dask")
-
+        
     # Load ND2 data as a lazy Dask array
     with nd2.ND2File(input_path) as nd2_file:
         all_frames = nd2_file.to_dask() # 4D array (T*Z, C, X, Y)
@@ -74,7 +77,7 @@ def preprocess(
         all_frames = all_frames[:, :, z_range, :, :] # ignore the z-slices with lots of motion artifacts
     
     n_chunks = (t_size + chunk_size - 1) // chunk_size
-    # print_mem_usage("After nd2 to dask")
+    dask.config.set(**{'array.slicing.split_large_chunks': True})
 
     # Perform jax array computations in series, and file saving in parallel
     for chunk_idx in tqdm(range(n_chunks)):
@@ -94,9 +97,8 @@ def preprocess(
             print(f"Uniform background of {noise_data[:,0,0]} will be subtracted from binned superpixels in the respective channels.")
         
         # Apply transformations
-        chunk_data = bin_xy_jit(chunk_data, binsize) # Bin to superpixel
-        chunk_data = subtract_bg_jit(chunk_data, noise_data, bitdepth) # Subtract binned noise from binned img
-        chunk_data_np = np.array(chunk_data.block_until_ready()).astype(np.int16, copy=False)  # Ensure JAX computation finishes before NumPy reads from it
+        chunk_data = bin_and_subtract_jit(chunk_data, noise_data, binsize, bitdepth) # Bin to superpixel
+        chunk_data.block_until_ready()
             
         # Parallel NRRD saving
         if save_as == 'nrrd':
@@ -104,7 +106,7 @@ def preprocess(
                 (
                     base_nrrd_path / f"{prefix}_t{t_start + t_offset + 1:04d}_ch{c+1}.nrrd",
                     # base_mip_path / f"{prefix}_t{t_start + t_offset + 1:04d}_ch{c+1}.png",
-                    chunk_data_np[t_offset, c, ...],  # Extract per timepoint per channel
+                    chunk_data[t_offset, c, ...],  # Extract per timepoint per channel
                     spacing
                 )
                 for t_offset in range(current_chunk_size)
@@ -117,7 +119,7 @@ def preprocess(
             tasks = [
                 (
                     base_tif_path / f"{prefix}_t{t_start + 1:04d}_to_t{t_offset + 1:04d}_ch{c+1}.tif",
-                    chunk_data_np[:, c, ...]  # Extract per-channel time series
+                    chunk_data[:, c, ...]  # Extract per-channel time series
                 )
                 for c in range(n_channels)
             ]            
@@ -126,8 +128,8 @@ def preprocess(
             raise ValueError("You must save the output as either 'tif' or 'nrrd'!") 
             
         print(f"Finished processing chunk {chunk_idx+1}/{n_chunks}")
-        del chunk_data_np
-        # print_mem_usage("After garbage collection")
+        gc.collect()
+        print_mem_usage("After garbage collection")
 
         
 def main():
@@ -163,7 +165,7 @@ def main():
     # Performance settings
     parser.add_argument('--chunk_size', type=int, default=20,
                         help='Timepoints (volumes) to process per chunk.')
-    parser.add_argument('--num_workers', type=int, default=64,
+    parser.add_argument('--num_workers', type=int, default=32,
                         help='Number of workers for parallel file IO.')    
     parser.add_argument('--gpu', type=int, default=3,
                         help='GPU device number to use.')

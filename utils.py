@@ -29,7 +29,3 @@ def parse_float_list(value):
             raise ValueError
     except (SyntaxError, ValueError):
         raise argparse.ArgumentTypeError("Invalid format. Expected a list of lists, e.g., '[[0.54, 0, 0], [0, 0.54, 0], [0, 0, 0.54]]'")
-
-def print_mem_usage(label):
-    process = psutil.Process(os.getpid())
-    print(f"[{label}] Memory usage: {process.memory_info().rss / 1024 ** 2:.2f} MB")

@@ -84,17 +84,20 @@ python main.py \
 ### Examples for processing multiple ND2 Files at once
 ```bash
 python main.py \
-    --input_path /store1/shared/panneuralGFP_SWF1212/data_raw/2025-02-06/2025-02-06-01.nd2 \
+    --input_path /store1/shared/panneuralGFP_SWF1212/data_raw/2025-02-10/2025-02-10-01.nd2 \
     --output_dir /store1/shared/panneuralGFP_SWF1212/data_processed/2025-02-06-01_output && \
 python main.py \
-    --input_path /store1/shared/panneuralGFP_SWF1212/data_raw/2025-02-06/2025-02-06-02.nd2 \
-    --output_dir /store1/shared/panneuralGFP_SWF1212/data_processed/2025-02-06-01_output/neuropal/2025-02-06-02 && \    
+    --input_path /store1/shared/panneuralGFP_SWF1212/data_raw/2025-02-10/2025-02-10-02.nd2 \
+    --output_dir /store1/shared/panneuralGFP_SWF1212/data_processed/2025-02-10-01_output/neuropal/2025-02-10-02 && \    
 python main.py \
-    --input_path /store1/shared/panneuralGFP_SWF1212/data_raw/2025-02-06/2025-02-06-03.nd2 \
-    --output_dir /store1/shared/panneuralGFP_SWF1212/data_processed/2025-02-06-01_output/neuropal/2025-02-06-03 && \    
+    --input_path /store1/shared/panneuralGFP_SWF1212/data_raw/2025-02-10/2025-02-10-03.nd2 \
+    --output_dir /store1/shared/panneuralGFP_SWF1212/data_processed/2025-02-10-01_output/neuropal/2025-02-10-03 && \    
 python main.py \
-    --input_path /store1/shared/panneuralGFP_SWF1212/data_raw/2025-02-06/2025-02-06-04.nd2 \
-    --output_dir /store1/shared/panneuralGFP_SWF1212/data_processed/2025-02-06-01_output/neuropal/2025-02-06-04   
+    --input_path /store1/shared/panneuralGFP_SWF1212/data_raw/2025-02-10/2025-02-10-04.nd2 \
+    --output_dir /store1/shared/panneuralGFP_SWF1212/data_processed/2025-02-10-01_output/neuropal/2025-02-10-04 && \  
+python main.py \
+    --input_path /store1/shared/panneuralGFP_SWF1212/data_raw/2025-02-10/2025-02-10-05.nd2 \
+    --output_dir /store1/shared/panneuralGFP_SWF1212/data_processed/2025-02-10-01_output/neuropal/2025-02-10-05     
 ```
 
 Alternatively, attach a `metadata.txt` in your input directory, and submit multiple nd2 files by running the script `submit_multi.sh`.
@@ -110,6 +113,7 @@ BFP = "2025-02-10-05"
 
 "2025-02-10-06":
 {
+}
 ```
 
 Here is the an example command line to submit all nd2 files specified in `metadata.txt` sequentially:
@@ -120,4 +124,4 @@ Here is the an example command line to submit all nd2 files specified in `metada
     --output_base "/store1/shared/panneuralGFP_SWF1212/data_processed"
 ```
 
-This will first return all the commands that call `main.py`, then execute them one by one.
+This will first print all the commands that call `main.py`, then execute them one by one.
