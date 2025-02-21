@@ -11,7 +11,7 @@ def save_nrrd(nrrd_path, vol_data, spacing):
     
     # Prepare NRRD header
     header = {
-        'type': 'int16',
+        'type': 'uint16',
         'dimension': 3,
         'space': 'left-posterior-superior',
         'sizes': list(vol_data.shape),

@@ -4,54 +4,41 @@ from pathlib import Path
 import tifffile
 import os
 from tqdm import tqdm
+import nd2
 
-def get_noise_data_nd2(blank_files: [str], savepath: str, chunk_size: int):
+def get_noise_data_nd2(blank_files: [str], savepath: str):
     """JAX-accelerated computation of averaged noise array from multiple .nd2 files"""
     # Use the first file in the blank directory to initialize the noise array
     filepath = blank_files[0]
     with nd2.ND2File(filepath) as nd2_file:
         all_frames = nd2_file.to_dask() # [T*Z, C, X, Y]
-
-    n_x = all_frames.shape[-2]
-    n_y = all_frames.shape[-1]
-
-    if len(all_frames.shape) == 3: # single channel recording
-        all_frames.reshape(all_frames.shape[0], 1, *all_frames.shape[1:])
-        n_c = 1
-    elif len(all_frames.shape) == 4:
-        n_c = all_frames.shape[1]
+    n_pages, n_channels, n_x, n_y = all_frames.shape
 
     # Initialize separate noise data arrays for each channel
-    total_frames = 0
-    noise_data = jnp.mean(all_frames[0:1].compute(), axis=0) # [C, X, Y]
+    noise_data = None
     
     # Process files with progress bar
     for filepath in tqdm(blank_files, desc="Processing noise files"):
         with nd2.ND2File(filepath) as nd2_file:
             all_frames = nd2_file.to_dask() # [T*Z, C, X, Y]
         assert all_frames.shape[-2] == n_x and all_frames.shape[-1] == n_y, "All blank frames should have the same XY dimension!!!"
-
-        n_pages = all_frames.shape[0]
-        n_chunks = (n_pages + chunk_size - 1) // chunk_size
         
-        for chunk_idx in tqdm(range(n_chunks)):
-            # Bring a small chunk of the Dask array to RAM
-            t_start = chunk_idx * chunk_size
-            t_end = min(t_start + chunk_size, t_size)
-            current_chunk_size = t_end - t_start
-
-            chunk_data = jnp.array(all_frames[t_start:t_end].compute(), dtype=jnp.int16)
-            chunk_avg = jnp.mean(chunk_data, axis=0) # [C, X, Y]
+        n_pages, n_channels, n_x, n_y = all_frames.shape
+        to_ram = min(n_pages, 2000) # take the first 2000 frames if the blank files are longer than that
+        chunk_data = jnp.array(all_frames[:to_ram].compute())
+        chunk_avg = jnp.mean(chunk_data, axis=0) # [C, X, Y]
+        if noise_data is None:
+            noise_data = chunk_avg
+        else:
             noise_data = (noise_data + chunk_avg) /2
-            
-            total_frames += current_chunk_size
 
     noise_data = jnp.rint(noise_data).astype('int16')  # round to the nearest integer
+    print(f"Averaged noise is of dimension {noise_data.shape}")
     tifffile.imwrite(savepath, noise_data) # export tif file for next time
-    return noise_data
+    return savepath
 
 
-def get_noise_data(blank_dir: str, chunk_size: int = 160):
+def get_noise_data(blank_dir: str):
     """
     Compute average noise from blank images
 
@@ -67,7 +54,7 @@ def get_noise_data(blank_dir: str, chunk_size: int = 160):
     if not blank_files:
         raise ValueError(f"No .nd2 files found in directory: {blank_dir}")
         
-    return get_noise_data_nd2(blank_files, savepath, chunk_size)
+    return get_noise_data_nd2(blank_files, savepath)
 
 
 def compute_uniform_noise_data(chunk_data, bg_percentile):
@@ -93,4 +80,4 @@ def compute_uniform_noise_data(chunk_data, bg_percentile):
     noise_values = jax.vmap(compute_uniform_bg)(jnp.arange(n_channels))  # Shape: (C,)
     noise_data = jnp.broadcast_to(noise_values[:, None, None], (n_channels, n_x, n_y))
 
-    return noise_data # [C, X, Y]
+    return noise_data.astype(jnp.int16) # [C, X, Y]

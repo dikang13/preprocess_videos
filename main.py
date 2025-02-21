@@ -19,12 +19,12 @@ import psutil
 
 # Create JIT-compiled version for JAX operations
 bin_xy_jit = jax.jit(bin_xy, static_argnames=['binsize'])
-# subtract_bg_jit = jax.jit(subtract_bg, static_argnames=['bitdepth'])
 bin_and_subtract_jit = jax.jit(bin_and_subtract, static_argnames=['binsize', 'bitdepth'])
 
-def print_mem_usage(label):
+def print_mem_usage(gpu):
     process = psutil.Process(os.getpid())
-    print(f"[{label}] Memory usage: {process.memory_info().rss / 1024 ** 2:.2f} MB")
+    print(f"Process Memory usage: {process.memory_info().rss / 1024 ** 2:.2f} MB")
+    print(f"GPU memory stats: {gpu.memory_stats()}")
 
 def preprocess(
     input_path, output_dir, 
@@ -36,18 +36,19 @@ def preprocess(
     save_as,
     spacing
 ):
+    # Get the first GPU device (if available)
+    gpu = jax.devices("gpu")[0]
 
     # Load noise data if a .tif file is provided, or compute noise by averaging frames in blank_dir
     noise_data = None
+
+    if blank_dir:
+        noise_path = get_noise_data(blank_dir)
+        print(f"Averaged blank frames from {blank_dir} is saved under {noise_path}.")
     
     if noise_path:
         noise_data = jnp.array(tifffile.imread(str(noise_path)))
-        noise_data = bin_xy_jit(noise_data, binsize) # bin to superpixel
         print(f"Loaded noise data of shape {noise_data.shape} from {noise_path}")
-    elif blank_dir:
-        noise_data, savepath = get_noise_data(blank_dir)
-        noise_data = bin_xy_jit(noise_data, binsize) # bin to superpixel
-        print(f"Computed noise data of shape {noise_data.shape} by averaging frames from {blank_dir}.")
     else:
         print("⚠️⚠️⚠️ WARNING: No blank frames provided. Assuming uniform background for all pixels.⚠️⚠️⚠️")
 
@@ -58,7 +59,6 @@ def preprocess(
         prefix = re.findall(r'202\d{1}-\d{2}-\d{2}-\d{2}', str(output_dir))
         prefix = prefix[-1] if prefix else ''
         base_nrrd_path = Path(output_dir) / "NRRD"
-        # base_mip_path = Path(output_dir) / "MIP"
     else: # .tif or .tiff
         base_tif_path = Path(output_dir)
         
@@ -77,38 +77,36 @@ def preprocess(
         all_frames = all_frames[:, :, z_range, :, :] # ignore the z-slices with lots of motion artifacts
     
     n_chunks = (t_size + chunk_size - 1) // chunk_size
-    dask.config.set(**{'array.slicing.split_large_chunks': True})
 
-    # Perform jax array computations in series, and file saving in parallel
+    # Perform jax array computations in series, and file saving in parallel   
     for chunk_idx in tqdm(range(n_chunks)):
         t_start = chunk_idx * chunk_size
         t_end = min(t_start + chunk_size, t_size)
         current_chunk_size = t_end - t_start
 
         # Bring a small chunk of the Dask array to RAM
-        temp = all_frames[t_start:t_end].compute()
-        chunk_data = jnp.array(temp)
-        del temp
-        # print_mem_usage("After chunk from dask to mem")
+        input_data = jax.device_put(jnp.array(all_frames[t_start:t_end].compute(), dtype=jnp.uint16))
 
         # If blank frames are not passed in, a uniform background assumed for subtraction
         if noise_data is None:
-            noise_data = compute_uniform_noise_data(chunk_data, bg_percentile) # compute noise per channel from the first chunk
+            noise_data = compute_uniform_noise_data(input_data, bg_percentile) # compute noise per channel from the first chunk
+            print(f"Uniform background of {noise_data[:,0,0]} will be subtracted from binned superpixels in the respective channels.")
+
+        # Load binned noise to GPU
+        if chunk_idx == 0:
             noise_data = bin_xy_jit(noise_data, binsize) # bin noise data to superpixels
             noise_data = jnp.floor(noise_data / 100) * 100  # Round down to nearest hundred
-            print(f"Uniform background of {noise_data[:,0,0]} will be subtracted from binned superpixels in the respective channels.")
+            noise_data = jax.device_put(noise_data)
         
         # Apply transformations
-        chunk_data = bin_and_subtract_jit(chunk_data, noise_data, binsize, bitdepth) # Bin to superpixel
-        chunk_data.block_until_ready()
+        output_data = bin_and_subtract_jit(input_data, noise_data, binsize, bitdepth).astype(jnp.uint16) # Bin to superpixel
             
         # Parallel NRRD saving
         if save_as == 'nrrd':
             tasks = [
                 (
                     base_nrrd_path / f"{prefix}_t{t_start + t_offset + 1:04d}_ch{c+1}.nrrd",
-                    # base_mip_path / f"{prefix}_t{t_start + t_offset + 1:04d}_ch{c+1}.png",
-                    chunk_data[t_offset, c, ...],  # Extract per timepoint per channel
+                    jax.device_get(output_data[t_offset, c]),  # Extract per timepoint per channel
                     spacing
                 )
                 for t_offset in range(current_chunk_size)
@@ -121,7 +119,7 @@ def preprocess(
             tasks = [
                 (
                     base_tif_path / f"{prefix}_t{t_start + 1:04d}_to_t{t_offset + 1:04d}_ch{c+1}.tif",
-                    chunk_data[:, c, ...]  # Extract per-channel time series
+                    jax.device_get(output_data[:, c])  # Extract per-channel time series
                 )
                 for c in range(n_channels)
             ]            
@@ -131,8 +129,9 @@ def preprocess(
             
         print(f"Finished processing chunk {chunk_idx+1}/{n_chunks}")
         gc.collect()
-        print_mem_usage("After garbage collection")
-
+        # jax.numpy.zeros(1).block_until_ready()  # Helps sync and free memory
+        if chunk_idx % 10 == 0 and chunk_idx > 0:
+            print_mem_usage(gpu)
         
 def main():
     parser = argparse.ArgumentParser(description='Process microscopy image data with background subtraction and binning.')

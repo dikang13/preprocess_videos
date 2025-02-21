@@ -7,7 +7,6 @@ def bin_xy(data, binsize):
     Parameters:
     - data: jnp.array of shape (..., X, Y) → Input image
     - binsize: int → Factor by which to downsample (bin) the image
-    - bitdepth: int (8, 11, 12, 16) → Bit depth for clipping
 
     Returns:
     - Binned and transposed array of shape (..., X//binsize, Y//binsize)
@@ -21,14 +20,14 @@ def bin_xy(data, binsize):
 
     # Sum over bins
     data_binned = data_binned.sum(axis=(-3, -1))  # Summing in XY only
+    print(f"Binned averaged noise is of dimension {data_binned.shape}")
     return data_binned
     
 
 def bin_and_subtract(chunk_data, noise_data, binsize, bitdepth):
 
-    # Sum over bins
-    chunk_data_binned = bin_xy(chunk_data, binsize)
-
+    chunk_data = bin_xy(chunk_data, binsize) # bin first
+    
     """
     Subtract background jnp array from real data jnp array, where (C, X, Y) dimensions are matching in size
 
@@ -40,9 +39,9 @@ def bin_and_subtract(chunk_data, noise_data, binsize, bitdepth):
     - chunk data: jnp.array of shape  (T, Z, C, X, Y)
     """
 
-    assert chunk_data_binned.shape[-2:] == noise_data.shape[-2:], "Real data and noise data should have identical XY dimensions"   
+    assert chunk_data.shape[-2:] == noise_data.shape[-2:], f"Real data {chunk_data.shape[-2:]} and noise data {noise_data.shape[-2:]} have different XY dimensions"   
     noise_expanded = jnp.expand_dims(noise_data, axis=(0, 2)) # (C, X, Y) -> (1, C, 1, X, Y)
-    noise_subtracted = chunk_data_binned - noise_expanded # matched to (T, C, Z, X, Y)
+    noise_subtracted = chunk_data - noise_expanded # matched to (T, C, Z, X, Y)
     clipped = jnp.clip(noise_subtracted, 0, 2 ** bitdepth) # Clip values to fit in bit range
     
     return jnp.transpose(clipped, axes=(0,1,4,3,2)) # Rearrange axes
