@@ -1,11 +1,11 @@
 import os
+os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.95"
+
 import argparse
 from pathlib import Path
 from tqdm import tqdm
 import numpy as np
 import nd2
-import jax
-import jax.numpy as jnp
 import tifffile
 import re
 import dask
@@ -16,6 +16,13 @@ from noise import get_noise_data, compute_uniform_noise_data
 from utils import parse_slice, parse_list, parse_float_list
 import gc
 import psutil
+import time
+
+import jax
+jax.config.update('jax_platform_name', 'gpu')
+jax.config.update('jax_disable_jit', False)
+jax.config.update('jax_enable_x64', False)  # Use float32/int32 by default
+import jax.numpy as jnp
 
 # Create JIT-compiled version for JAX operations
 bin_xy_jit = jax.jit(bin_xy, static_argnames=['binsize'])
@@ -53,14 +60,10 @@ def preprocess(
         print("⚠️⚠️⚠️ WARNING: No blank frames provided. Assuming uniform background for all pixels.⚠️⚠️⚠️")
 
     # Create output directories
-    if save_as == "nrrd":
-        Path(output_dir, "NRRD").mkdir(parents=True, exist_ok=True)
-        # Path(output_dir, "MIP").mkdir(parents=True, exist_ok=True)
-        prefix = re.findall(r'202\d{1}-\d{2}-\d{2}-\d{2}', str(output_dir))
-        prefix = prefix[-1] if prefix else ''
-        base_nrrd_path = Path(output_dir) / "NRRD"
-    else: # .tif or .tiff
-        base_tif_path = Path(output_dir)
+    Path(output_dir, "NRRD").mkdir(parents=True, exist_ok=True)
+    prefix = re.findall(r'202\d{1}-\d{2}-\d{2}-\d{2}', str(output_dir))
+    prefix = prefix[-1] if prefix else ''
+    base_nrrd_path = Path(output_dir) / "NRRD"
         
     # Load ND2 data as a lazy Dask array
     with nd2.ND2File(input_path) as nd2_file:
@@ -75,63 +78,54 @@ def preprocess(
         all_frames = all_frames.reshape(t_size, n_z, n_channels, n_x, n_y) # 5D array (T, Z, C, X, Y)
         all_frames = all_frames.transpose(0, 2, 1, 3, 4)  # 5D array (T, C, Z, X, Y)
         all_frames = all_frames[:, :, z_range, :, :] # ignore the z-slices with lots of motion artifacts
-    
-    n_chunks = (t_size + chunk_size - 1) // chunk_size
 
+    # If blank frames are not passed in, a uniform background assumed for subtraction
+    if noise_data is None:
+        noise_data = compute_uniform_noise_data(all_frames[:5].compute(), bg_percentile) # compute noise per channel from the first 5 time points
+        noise_data = bin_xy_jit(noise_data, binsize) # bin noise data to superpixels
+        noise_data = jnp.floor(noise_data / 100) * 100  # Round down to nearest hundred
+        print(f"Uniform background of shape {noise_data.shape} and value {noise_data[:,0,0]} is subtracted from each pixel in the respective channels.")
+    else:
+        noise_data = bin_xy_jit(noise_data, binsize) # bin noise data to superpixels
+
+    # Load binned noise to GPU
+    noise_data = jax.device_put(noise_data)
+        
     # Perform jax array computations in series, and file saving in parallel   
-    for chunk_idx in tqdm(range(n_chunks)):
+    n_chunks = (t_size + chunk_size - 1) // chunk_size
+    for chunk_idx in tqdm(range(n_chunks)):           
         t_start = chunk_idx * chunk_size
         t_end = min(t_start + chunk_size, t_size)
         current_chunk_size = t_end - t_start
-
-        # Bring a small chunk of the Dask array to RAM
-        input_data = jax.device_put(jnp.array(all_frames[t_start:t_end].compute(), dtype=jnp.uint16))
-
-        # If blank frames are not passed in, a uniform background assumed for subtraction
-        if noise_data is None:
-            noise_data = compute_uniform_noise_data(input_data, bg_percentile) # compute noise per channel from the first chunk
-            print(f"Uniform background of {noise_data[:,0,0]} will be subtracted from binned superpixels in the respective channels.")
-
-        # Load binned noise to GPU
-        if chunk_idx == 0:
-            noise_data = bin_xy_jit(noise_data, binsize) # bin noise data to superpixels
-            noise_data = jnp.floor(noise_data / 100) * 100  # Round down to nearest hundred
-            noise_data = jax.device_put(noise_data)
         
-        # Apply transformations
-        output_data = bin_and_subtract_jit(input_data, noise_data, binsize, bitdepth).astype(jnp.uint16) # Bin to superpixel
+        print(f"Starting chunk {chunk_idx+1}/{n_chunks}")
+        initial_gpu_mem = gpu.memory_stats()["bytes_in_use"]
+
+        with jax.default_device(gpu):  # Explicitly manage device context
+            cpu_data = all_frames[t_start:t_end].compute().astype(np.uint16) # Bring a small chunk of the Dask array to RAM
+            data = jax.device_put(jnp.asarray(cpu_data))
+            output = bin_and_subtract_jit(data, noise_data, binsize, bitdepth)
+            output.block_until_ready()
+            cpu_output = jax.device_get(output)
+        del data 
+        del output
             
-        # Parallel NRRD saving
-        if save_as == 'nrrd':
-            tasks = [
-                (
-                    base_nrrd_path / f"{prefix}_t{t_start + t_offset + 1:04d}_ch{c+1}.nrrd",
-                    jax.device_get(output_data[t_offset, c]),  # Extract per timepoint per channel
-                    spacing
-                )
-                for t_offset in range(current_chunk_size)
-                for c in range(n_channels)
-            ]
-            batch_save_nrrd(tasks, num_workers)  # Adjust workers based on CPU
-        
-        # Parallel TIF saving
-        elif save_as == 'tif':
-            tasks = [
-                (
-                    base_tif_path / f"{prefix}_t{t_start + 1:04d}_to_t{t_offset + 1:04d}_ch{c+1}.tif",
-                    jax.device_get(output_data[:, c])  # Extract per-channel time series
-                )
-                for c in range(n_channels)
-            ]            
-            batch_save_tif(tasks, num_workers)
-        else:
-            raise ValueError("You must save the output as either 'tif' or 'nrrd'!") 
-            
-        print(f"Finished processing chunk {chunk_idx+1}/{n_chunks}")
+        # Parallel NRRD file saving
+        tasks = [
+            (
+                base_nrrd_path / f"{prefix}_t{t_start + t_offset + 1:04d}_ch{c+1}.nrrd",
+                cpu_output[t_offset, c],  # Extract per timepoint per channel
+                spacing
+            )
+            for t_offset in range(current_chunk_size)
+            for c in range(n_channels)
+        ]
+        batch_save_nrrd(tasks, num_workers)  # Adjust workers based on CPU
         gc.collect()
-        # jax.numpy.zeros(1).block_until_ready()  # Helps sync and free memory
-        if chunk_idx % 10 == 0 and chunk_idx > 0:
-            print_mem_usage(gpu)
+        jax.device_get(jnp.ones(1))  # Force sync with device
+        time.sleep(1)
+        # final_gpu_mem = gpu.memory_stats()["bytes_in_use"]
+        # print(f"Memory difference: {(final_gpu_mem - initial_gpu_mem) / 1024**2:.2f} MB")
         
 def main():
     parser = argparse.ArgumentParser(description='Process microscopy image data with background subtraction and binning.')
