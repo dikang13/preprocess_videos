@@ -21,6 +21,6 @@ ENV/
 .idea/
 .vscode/
 *.log
-main_old.py
 .ipynb_checkpoints
 *env
+*old
