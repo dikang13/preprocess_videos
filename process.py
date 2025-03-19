@@ -1,9 +1,9 @@
 import jax
 import jax.numpy as jnp
-from functools import partial
-from jax import lax, jit
+# from functools import partial
+# from jax import lax, jit
 
-@partial(jit, static_argnums=(1,))
+# @partial(jit, static_argnums=(1,))
 def bin_xy(data, binsize):
     """
     Optimized bin_xy using JAX's lax.reduce_window for better performance on RTX A4000.
@@ -23,24 +23,12 @@ def bin_xy(data, binsize):
     
     # Crop to exact multiple of binsize
     data = data[..., :h_bins * binsize, :w_bins * binsize]
+    data_binned = data.reshape(*data.shape[:-2], h_bins, binsize, w_bins, binsize)
+    data_binned = data_binned.sum(axis=(-3, -1))  # Summing over bins in XY only
     
-    # Define window dimensions: sliding windows of size (binsize x binsize)
-    # with strides of the same size for non-overlapping windows
-    window_dims = (1,) * (data.ndim - 2) + (binsize, binsize)
-    strides = (1,) * (data.ndim - 2) + (binsize, binsize)
-    
-    # Use reduce_window with sum reduction for efficient binning on GPU
-    result = lax.reduce_window(
-        data,
-        init_value=0,
-        computation=lax.add,
-        window_dimensions=window_dims,
-        window_strides=strides,
-        padding='VALID'
-    )
-    return result # (..., X//binsize, Y//binsize)
+    return data_binned
 
-@partial(jit, static_argnums=(2, 3))
+# @partial(jit, static_argnums=(2, 3))
 def bin_and_subtract(chunk_data, noise_binned, binsize, bitdepth):
     """
     Optimized version of bin_and_subtract specifically for RTX A4000 GPU.
@@ -67,7 +55,8 @@ def bin_and_subtract(chunk_data, noise_binned, binsize, bitdepth):
     
     # Subtract and clip in one operation to minimize intermediate allocations
     result = jnp.clip(chunk_binned - noise_expanded, 0, 2 ** bitdepth) # (T, Z, C, X, Y)
-    # print("Result shape: {}", result.shape)
+    result = jnp.transpose(result.astype('int16'), axes=(0, 2, 4, 3, 1)) # (T, C, Y, X, Z)
+    print(f"Result shape {result.shape} and {result.dtype}")
     
     # Transpose and convert to int16
-    return jnp.transpose(result.astype(jnp.int16), axes=(0, 2, 4, 3, 1)) # (T, C, Y, X, Z)
+    return result
