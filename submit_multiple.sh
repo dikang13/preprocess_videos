@@ -22,11 +22,15 @@ while getopts "i:o:g:h" opt; do
     esac
 done
 
-# Check if required arguments are provided
+    # Check if required arguments are provided
 if [ -z "$INPUT_BASE" ] || [ -z "$OUTPUT_BASE" ]; then
     echo "Error: Both INPUT_BASE and OUTPUT_BASE must be specified"
     usage
 fi
+
+# For debugging
+echo "INPUT_BASE set to: $INPUT_BASE"
+echo "OUTPUT_BASE set to: $OUTPUT_BASE"
 
 # Validate GPU_ID is between 0-3
 if ! [[ "$GPU_ID" =~ ^[0-3]$ ]]; then
@@ -51,60 +55,44 @@ fi
 
 # Set environment variable
 export CUDA_VISIBLE_DEVICES=$GPU_ID
-export OMP_NUM_THREADS=1
-export MKL_NUM_THREADS=1
-export OPENBLAS_NUM_THREADS=1
 echo "Using GPU $GPU_ID for processing"
 
 # Process a primary image and its associated fluorescence images
 process_primary_image() {
     local primary=$1
     
-    echo "Processing primary image: $primary"
-    XLA_PYTHON_CLIENT_PREALLOCATE=false \
-    XLA_PYTHON_CLIENT_ALLOCATOR=platform \
-    XLA_PYTHON_CLIENT_MEM_FRACTION=0.90 \
-    TF_FORCE_GPU_ALLOW_GROWTH=true \
-    python main.py \
+    echo "Processing freely moving video: $primary"
+    echo "Will process: $INPUT_BASE/$primary.nd2"
+    # Verify the file exists
+    if [ ! -f "$INPUT_BASE/$primary.nd2" ]; then
+        echo "WARNING: Input file $INPUT_BASE/$primary.nd2 not found. Skipping."
+        return 1
+    fi
+
+    sleep 5
+    
+    XLA_PYTHON_CLIENT_ALLOCATOR=platform python main.py \
         --input_path "$INPUT_BASE/$primary.nd2" \
         --output_dir "$OUTPUT_BASE/${primary}_output" \
         --gpu $GPU_ID \
         --global_t_start 0 \
-        --global_t_end 400
-
-    sleep 5
+        --global_t_end 400 &
     
-    XLA_PYTHON_CLIENT_PREALLOCATE=false \
-    XLA_PYTHON_CLIENT_ALLOCATOR=platform \
-    XLA_PYTHON_CLIENT_MEM_FRACTION=0.90 \
-    TF_FORCE_GPU_ALLOW_GROWTH=true \
-    python main.py \
+    XLA_PYTHON_CLIENT_ALLOCATOR=platform python main.py \
         --input_path "$INPUT_BASE/$primary.nd2" \
         --output_dir "$OUTPUT_BASE/${primary}_output" \
         --gpu $GPU_ID \
         --global_t_start 400 \
-        --global_t_end 800
-
-    sleep 5
+        --global_t_end 800 &
     
-    XLA_PYTHON_CLIENT_PREALLOCATE=false \
-    XLA_PYTHON_CLIENT_ALLOCATOR=platform \
-    XLA_PYTHON_CLIENT_MEM_FRACTION=0.90 \
-    TF_FORCE_GPU_ALLOW_GROWTH=true \
-    python main.py \
+    XLA_PYTHON_CLIENT_ALLOCATOR=platform python main.py \
         --input_path "$INPUT_BASE/$primary.nd2" \
         --output_dir "$OUTPUT_BASE/${primary}_output" \
         --gpu $GPU_ID \
         --global_t_start 800 \
-        --global_t_end 1200
-
-    sleep 5
+        --global_t_end 1200 &
     
-    XLA_PYTHON_CLIENT_PREALLOCATE=false \
-    XLA_PYTHON_CLIENT_ALLOCATOR=platform \
-    XLA_PYTHON_CLIENT_MEM_FRACTION=0.90 \
-    TF_FORCE_GPU_ALLOW_GROWTH=true \
-    python main.py \
+    XLA_PYTHON_CLIENT_ALLOCATOR=platform python main.py \
         --input_path "$INPUT_BASE/$primary.nd2" \
         --output_dir "$OUTPUT_BASE/${primary}_output" \
         --gpu $GPU_ID \
@@ -133,24 +121,21 @@ process_primary_image() {
         # Extract fluorescence image IDs while in the correct section
         if [[ $in_section -eq 1 && $line =~ = ]]; then
             # Extract the image ID (removing quotes)
-            local fluorescence_id=$(echo "$line" | cut -d'"' -f2)
+            local fluorescence_id=$(echo "$line" | cut -d\" -f2)
             fluorescence_images+=("$fluorescence_id")
         fi
     done < "$METADATA_FILE"
     
     # Process each fluorescence image
     for fluorescence_id in "${fluorescence_images[@]}"; do
-        echo "Processing fluorescence image: $fluorescence_id"
-        XLA_PYTHON_CLIENT_PREALLOCATE=false \
-        XLA_PYTHON_CLIENT_ALLOCATOR=platform \
-        XLA_PYTHON_CLIENT_MEM_FRACTION=0.90 \
-        XLA_FORCE_HOST_PLATFORM_DEVICE_COUNT=0 \
-        TF_FORCE_GPU_ALLOW_GROWTH=true \
-        python main.py \
+        echo "Processing immobilized video: $fluorescence_id"
+        XLA_PYTHON_CLIENT_ALLOCATOR=platform python main.py \
             --input_path "$INPUT_BASE/$fluorescence_id.nd2" \
             --output_dir "$OUTPUT_BASE/${primary}_output/neuropal/$fluorescence_id" \
             --gpu $GPU_ID &
     done
+
+    sleep 5
 }
 
 # Find all primary images from metadata file
@@ -158,10 +143,17 @@ primary_images=()
 while IFS= read -r line || [ -n "$line" ]; do
     if [[ $line =~ ^\"([0-9-]+)\": ]]; then
         primary_images+=("${BASH_REMATCH[1]}")
+        echo "Found primary image: ${BASH_REMATCH[1]}"
     fi
 done < "$METADATA_FILE"
 
 echo "Found ${#primary_images[@]} primary images in metadata file"
+if [ ${#primary_images[@]} -eq 0 ]; then
+    echo "WARNING: No primary images found in metadata file. Check the format of $METADATA_FILE"
+    # Debug content of file
+    echo "First 10 lines of metadata file:"
+    head -n 10 "$METADATA_FILE"
+fi
 echo "All processing will use GPU $GPU_ID (CUDA_VISIBLE_DEVICES=$GPU_ID)"
 
 # Process each primary image and its associated fluorescence images

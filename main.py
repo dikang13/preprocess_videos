@@ -1,4 +1,5 @@
 import os
+os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.25"
 import argparse
 from pathlib import Path
 from tqdm import tqdm
@@ -41,11 +42,11 @@ def preprocess(
     save_as,
     spacing
 ):
-    print(f"===process starts: {datetime.now().strftime('%H:%M:%S')}===")
+    print(f"===Process starts: {datetime.now().strftime('%H:%M:%S')}===")
     
     # Get the first GPU device (if available)
     jax.clear_caches()
-    time.sleep(1)
+    time.sleep(0.5)
     gpu = jax.devices("gpu")[0]
 
     # Create output directories
@@ -54,11 +55,14 @@ def preprocess(
         
     # Load ND2 metadata and determine dimensions
     with nd2.ND2File(input_path) as nd2_file:
-        all_frames = nd2_file.to_dask()
+        raw_frames = nd2_file.to_dask()
+
+    with dask.config.set(**{'array.slicing.split_large_chunks': False}):
+        n_pages, n_channels, n_x, n_y = raw_frames.shape # Get raw dimensions first
+        max_t = n_pages // n_z
+        all_frames = raw_frames.reshape(max_t, n_z, n_channels, n_x, n_y) # 5D array (T, Z, C, X, Y)
+        all_frames = all_frames[:, z_range, :, :, :] # ignore the z-slices with lots of motion artifacts
         
-    # Get dimensions first
-    n_pages, n_channels, n_x, n_y = all_frames.shape
-    max_t = n_pages // n_z
     global_t_end = min(max_t, global_t_end)
     t_size = global_t_end - global_t_start
 
@@ -73,7 +77,7 @@ def preprocess(
         print("⚠️⚠️⚠️ WARNING: No blank frames provided. Assuming uniform background for all pixels.⚠️⚠️⚠️")
         # Use zarr data for computing noise
         noise_pages = min(400, n_pages)
-        noise_data = all_frames[:noise_pages].compute()
+        noise_data = raw_frames[:noise_pages].compute()
         noise_data = compute_uniform_noise_data(noise_data, bg_percentile) # compute noise per channel from the first 5 time points
         noise_data = bin_xy_jit(noise_data, binsize) # bin noise data to superpixels
         print(f"Uniform background of shape {noise_data.shape} and value {noise_data[:,0,0]} is subtracted from each pixel in the respective channels.")
@@ -90,32 +94,23 @@ def preprocess(
     prefix = prefix[-1] if prefix else ''
     
     for chunk_idx in tqdm(range(n_chunks)):           
-        t_start = chunk_idx * chunk_size + global_t_start
-        t_end = min(t_start + chunk_size + global_t_start, global_t_end)
+        t_start = global_t_start + chunk_idx * chunk_size
+        t_end = min(t_start + chunk_size, global_t_end)
         # t_start = chunk_idx * chunk_size
         # t_end = min(t_start + chunk_size, t_size)
+        # page_start = t_start * n_z
+        # page_end = t_end * n_z
         current_chunk_size = t_end - t_start
-        page_start = t_start * n_z
-        page_end = t_end * n_z
-        print(f"Starting chunk {chunk_idx+1}/{n_chunks} for Frames {page_start}-{page_end} (t{t_start}-{t_end})")
+        print(f"Started processing t={t_start}~{t_end} of chunk size {current_chunk_size}")
         
-        # Load data from zarr instead of directly from ND2
-        with dask.config.set(**{'array.slicing.split_large_chunks': True}):
-            cpu_data = all_frames[page_start:page_end].compute()
-        
-        # Reshape and slice as before
+        # Load data in small chunks
+        cpu_data = all_frames[t_start:t_end].compute()
         print(f"===input of shape {cpu_data.shape} brought from Dask to RAM: {datetime.now().strftime('%H:%M:%S')}===")
-        cpu_data = jnp.array(cpu_data, dtype=jnp.int16)
-        cpu_data = cpu_data.reshape(current_chunk_size, n_z, n_channels, n_x, n_y) # 5D array (T, Z, C, X, Y)
-        cpu_data = cpu_data[:, z_range, :, :, :] # ignore the z-slices with lots of motion artifacts
-        print(f"===input of shape {cpu_data.shape} sent to GPU: {datetime.now().strftime('%H:%M:%S')}===")
         
-        with jax.default_device(gpu):  # Explicitly manage device context
-            data = jax.device_put(cpu_data)
+        with jax.default_device(gpu):
+            data = jax.device_put(jnp.array(cpu_data, dtype=jnp.int16))
             output = bin_and_subtract_jit(data, noise_data, binsize, bitdepth)
             output.block_until_ready()
-            time.sleep(0.5)
-            jax.device_get(jnp.ones(1))  # Force sync with device
             cpu_output = jax.device_get(output)
             del data, output
             
@@ -135,13 +130,14 @@ def preprocess(
         gc.collect()
         time.sleep(0.5)
         gc.collect()
-        print(f"===iteration finishes: {datetime.now().strftime('%H:%M:%S')}===")
+        print(f"===Finished processing t={t_start}~{t_end} finishes: {datetime.now().strftime('%H:%M:%S')}===")
         
     gc.collect()
     jax.clear_caches()
     time.sleep(0.5)
+    print_mem_usage(gpu)
     gc.collect()
-    print(f"===process finishes: {datetime.now().strftime('%H:%M:%S')}===")
+    print(f"===Process ends: {datetime.now().strftime('%H:%M:%S')}===")
 
     
 def main():
@@ -179,9 +175,9 @@ def main():
                         help='Timepoints (volumes) to process per chunk.')
     parser.add_argument('--global_t_end', type=int, default=60,
                         help='Timepoints (volumes) to process per chunk.')    
-    parser.add_argument('--chunk_size', type=int, default=64,
+    parser.add_argument('--chunk_size', type=int, default=8,
                         help='Timepoints (volumes) to process per chunk.')
-    parser.add_argument('--num_workers', type=int, default=64,
+    parser.add_argument('--num_workers', type=int, default=8,
                         help='Number of workers for parallel file IO.')    
     parser.add_argument('--gpu', type=int, default=3,
                         help='GPU device number to use.')
@@ -211,8 +207,6 @@ def main():
 
     x = jax.device_put(np.ones((1024, 1024, 10), dtype=np.float32))
     del x
-    jax.clear_caches()
-    print_mem_usage(gpu)
 
 if __name__ == '__main__':
     main()
