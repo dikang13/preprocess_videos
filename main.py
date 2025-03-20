@@ -42,7 +42,7 @@ def preprocess(
     save_as,
     spacing
 ):
-    print(f"===Process starts: {datetime.now().strftime('%H:%M:%S')}===")
+    print(f"===Process for t={global_t_start}~{global_t_end} begins @ {datetime.now().strftime('%H:%M:%S')}===")
     
     # Get the first GPU device (if available)
     jax.clear_caches()
@@ -96,17 +96,11 @@ def preprocess(
     for chunk_idx in tqdm(range(n_chunks)):           
         t_start = global_t_start + chunk_idx * chunk_size
         t_end = min(t_start + chunk_size, global_t_end)
-        # t_start = chunk_idx * chunk_size
-        # t_end = min(t_start + chunk_size, t_size)
-        # page_start = t_start * n_z
-        # page_end = t_end * n_z
         current_chunk_size = t_end - t_start
-        print(f"Started processing t={t_start}~{t_end} of chunk size {current_chunk_size}")
+        print(f"===Working on t={t_start}~{t_end} of raw dimension {all_frames[t_start:t_end].shape} @ {datetime.now().strftime('%H:%M:%S')}===")
         
         # Load data in small chunks
-        cpu_data = all_frames[t_start:t_end].compute()
-        print(f"===input of shape {cpu_data.shape} brought from Dask to RAM: {datetime.now().strftime('%H:%M:%S')}===")
-        
+        cpu_data = all_frames[t_start:t_end].compute()        
         with jax.default_device(gpu):
             data = jax.device_put(jnp.array(cpu_data, dtype=jnp.int16))
             output = bin_and_subtract_jit(data, noise_data, binsize, bitdepth)
@@ -115,7 +109,6 @@ def preprocess(
             del data, output
             
         # Parallel NRRD file saving
-        print(f"===output taken down to CPU: {datetime.now().strftime('%H:%M:%S')}===")
         tasks = [
             (
                 base_nrrd_path / f"{prefix}_t{t_start + t_offset + 1:04d}_ch{c+1}.nrrd",
@@ -126,18 +119,18 @@ def preprocess(
             for c in range(n_channels)
         ]
         batch_save_nrrd(tasks, num_workers)  # Adjust workers based on CPU
+        print(f"===Finished t={t_start}~{t_end} of processed dimension {cpu_output.shape} @ {datetime.now().strftime('%H:%M:%S')}===")
         del cpu_data, cpu_output
         gc.collect()
         time.sleep(0.5)
         gc.collect()
-        print(f"===Finished processing t={t_start}~{t_end} finishes: {datetime.now().strftime('%H:%M:%S')}===")
         
     gc.collect()
+    print_mem_usage(gpu)
     jax.clear_caches()
     time.sleep(0.5)
-    print_mem_usage(gpu)
     gc.collect()
-    print(f"===Process ends: {datetime.now().strftime('%H:%M:%S')}===")
+    print(f"===Process for t={global_t_start}~{global_t_end} ends @ {datetime.now().strftime('%H:%M:%S')}===")
 
     
 def main():
@@ -175,7 +168,7 @@ def main():
                         help='Timepoints (volumes) to process per chunk.')
     parser.add_argument('--global_t_end', type=int, default=60,
                         help='Timepoints (volumes) to process per chunk.')    
-    parser.add_argument('--chunk_size', type=int, default=8,
+    parser.add_argument('--chunk_size', type=int, default=4,
                         help='Timepoints (volumes) to process per chunk.')
     parser.add_argument('--num_workers', type=int, default=8,
                         help='Number of workers for parallel file IO.')    
@@ -205,6 +198,7 @@ def main():
         spacing=args.spacing
     )
 
+    # Flush memory out of GPU
     x = jax.device_put(np.ones((1024, 1024, 10), dtype=np.float32))
     del x
 

@@ -61,8 +61,7 @@ echo "Using GPU $GPU_ID for processing"
 process_primary_image() {
     local primary=$1
     
-    echo "Processing freely moving video: $primary"
-    echo "Will process: $INPUT_BASE/$primary.nd2"
+    echo "Processing freely moving video: $INPUT_BASE/$primary.nd2"
     # Verify the file exists
     if [ ! -f "$INPUT_BASE/$primary.nd2" ]; then
         echo "WARNING: Input file $INPUT_BASE/$primary.nd2 not found. Skipping."
@@ -76,13 +75,34 @@ process_primary_image() {
         --output_dir "$OUTPUT_BASE/${primary}_output" \
         --gpu $GPU_ID \
         --global_t_start 0 \
-        --global_t_end 400 &
+        --global_t_end 0
     
     XLA_PYTHON_CLIENT_ALLOCATOR=platform python main.py \
         --input_path "$INPUT_BASE/$primary.nd2" \
         --output_dir "$OUTPUT_BASE/${primary}_output" \
         --gpu $GPU_ID \
+        --global_t_start 0 \
+        --global_t_end 200 &
+    
+    XLA_PYTHON_CLIENT_ALLOCATOR=platform python main.py \
+        --input_path "$INPUT_BASE/$primary.nd2" \
+        --output_dir "$OUTPUT_BASE/${primary}_output" \
+        --gpu $GPU_ID \
+        --global_t_start 200 \
+        --global_t_end 400 &
+
+    XLA_PYTHON_CLIENT_ALLOCATOR=platform python main.py \
+        --input_path "$INPUT_BASE/$primary.nd2" \
+        --output_dir "$OUTPUT_BASE/${primary}_output" \
+        --gpu $GPU_ID \
         --global_t_start 400 \
+        --global_t_end 600 &
+
+    XLA_PYTHON_CLIENT_ALLOCATOR=platform python main.py \
+        --input_path "$INPUT_BASE/$primary.nd2" \
+        --output_dir "$OUTPUT_BASE/${primary}_output" \
+        --gpu $GPU_ID \
+        --global_t_start 600 \
         --global_t_end 800 &
     
     XLA_PYTHON_CLIENT_ALLOCATOR=platform python main.py \
@@ -90,16 +110,28 @@ process_primary_image() {
         --output_dir "$OUTPUT_BASE/${primary}_output" \
         --gpu $GPU_ID \
         --global_t_start 800 \
+        --global_t_end 1000 &
+
+    XLA_PYTHON_CLIENT_ALLOCATOR=platform python main.py \
+        --input_path "$INPUT_BASE/$primary.nd2" \
+        --output_dir "$OUTPUT_BASE/${primary}_output" \
+        --gpu $GPU_ID \
+        --global_t_start 1000 \
         --global_t_end 1200 &
-    
+
     XLA_PYTHON_CLIENT_ALLOCATOR=platform python main.py \
         --input_path "$INPUT_BASE/$primary.nd2" \
         --output_dir "$OUTPUT_BASE/${primary}_output" \
         --gpu $GPU_ID \
         --global_t_start 1200 \
+        --global_t_end 1400 & 
+
+    XLA_PYTHON_CLIENT_ALLOCATOR=platform python main.py \
+        --input_path "$INPUT_BASE/$primary.nd2" \
+        --output_dir "$OUTPUT_BASE/${primary}_output" \
+        --gpu $GPU_ID \
+        --global_t_start 1400 \
         --global_t_end 1600
-        
-    sleep 5 
     
     # Extract the associated images for this primary from the metadata file
     local in_section=0
@@ -128,7 +160,7 @@ process_primary_image() {
     
     # Process each fluorescence image
     for fluorescence_id in "${fluorescence_images[@]}"; do
-        echo "Processing immobilized video: $fluorescence_id"
+        echo "Processing immobilized video: $INPUT_BASE/$fluorescence_id"
         XLA_PYTHON_CLIENT_ALLOCATOR=platform python main.py \
             --input_path "$INPUT_BASE/$fluorescence_id.nd2" \
             --output_dir "$OUTPUT_BASE/${primary}_output/neuropal/$fluorescence_id" \
@@ -143,13 +175,13 @@ primary_images=()
 while IFS= read -r line || [ -n "$line" ]; do
     if [[ $line =~ ^\"([0-9-]+)\": ]]; then
         primary_images+=("${BASH_REMATCH[1]}")
-        echo "Found primary image: ${BASH_REMATCH[1]}"
+        echo "Found freely moving video: ${BASH_REMATCH[1]}"
     fi
 done < "$METADATA_FILE"
 
-echo "Found ${#primary_images[@]} primary images in metadata file"
+echo "Found a total of ${#primary_images[@]} freely moving videos in metadata file"
 if [ ${#primary_images[@]} -eq 0 ]; then
-    echo "WARNING: No primary images found in metadata file. Check the format of $METADATA_FILE"
+    echo "WARNING: No freely moving videos found in metadata file. Check the format of $METADATA_FILE"
     # Debug content of file
     echo "First 10 lines of metadata file:"
     head -n 10 "$METADATA_FILE"
@@ -161,4 +193,5 @@ for primary in "${primary_images[@]}"; do
     process_primary_image "$primary"
 done
 
-echo "All processing commands completed using GPU $GPU_ID"
+echo "All processing commands for $INPUT_BASE completed using GPU $GPU_ID."
+echo "You may now exit from this terminal."
